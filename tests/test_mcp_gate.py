@@ -554,33 +554,97 @@ class ReviewFindings(ServerCase):
         self.assertEqual(seen.get("hdr"), "2025-06-18")
         self.assertTrue(any("negotiated protocolVersion 2025-06-18" in e for e in evidence))
 
-    def test_signing_key_survives_a_concurrent_first_run(self):
-        """O_EXCL with no FileExistsError handler raised on the losing process."""
+    def test_signing_key_refuses_an_empty_key_file(self):
+        """The exact reviewer repro: the winner has created the file but not yet
+        written it, so the loser used to read "" and sign forgeable receipts."""
         home = tempfile.mkdtemp()
         real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
         os.environ["HOME"] = home
         try:
             kf = os.path.join(home, ".mcp-gate-key")
-            real_open = os.open
-
-            def racing_open(path, flags, mode=0o777, **kw):
-                # Another process creates the file between the exists() check and ours.
-                if path == kf and flags & os.O_EXCL:
-                    with open(kf, "w") as fh:
-                        fh.write("a" * 64)
-                return real_open(path, flags, mode, **kw)
-
-            os.open = racing_open
+            fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # created, not written
             try:
-                key = gate._signing_key()
+                with self.assertRaises(gate.KeyUnavailable):
+                    gate._signing_key()
             finally:
-                os.open = real_open
-            self.assertEqual(key, "a" * 64)
+                os.close(fd)
         finally:
             if real_home is not None:
                 os.environ["HOME"] = real_home
             if had is not None:
                 os.environ["MCP_GATE_KEY"] = had
+
+    def test_signing_key_is_published_atomically(self):
+        """A reader must see either no file or a complete 64-hex key, never a
+        half-written one."""
+        home = tempfile.mkdtemp()
+        real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        os.environ["HOME"] = home
+        try:
+            key = gate._signing_key()
+            self.assertEqual(len(key), 64)
+            int(key, 16)
+            kf = os.path.join(home, ".mcp-gate-key")
+            self.assertFalse(os.stat(kf).st_mode & (stat.S_IRWXG | stat.S_IRWXO))
+            # No temp file is left lying around.
+            self.assertEqual([f for f in os.listdir(home) if f.endswith(".tmp")], [])
+            # A second call is stable.
+            self.assertEqual(gate._signing_key(), key)
+        finally:
+            if real_home is not None:
+                os.environ["HOME"] = real_home
+            if had is not None:
+                os.environ["MCP_GATE_KEY"] = had
+
+    def test_blank_env_key_is_refused(self):
+        had = os.environ.get("MCP_GATE_KEY")
+        os.environ["MCP_GATE_KEY"] = "   "
+        try:
+            with self.assertRaises(gate.KeyUnavailable):
+                gate._signing_key()
+        finally:
+            if had is None:
+                os.environ.pop("MCP_GATE_KEY", None)
+            else:
+                os.environ["MCP_GATE_KEY"] = had
+
+    def test_cli_refuses_rather_than_tracebacks_on_an_empty_key(self):
+        tmp = tempfile.mkdtemp()
+        p = os.path.join(tmp, "r.json")
+        json.dump({"schema": "x", "timestamp": "2026-01-01T00:00:00+00:00",
+                   "hmac_sha256": "00"}, open(p, "w"))
+        proc = run_cli("verify-receipt", p, key="   ")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("cannot verify", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_refused_redirect_is_recorded_in_the_receipt(self):
+        """A REDIRECT-OFF-TARGET receipt used to carry an empty probe_evidence."""
+        class Elsewhere(Base):
+            def do_GET(self):
+                self.reply(200, TOOLS_RESULT)
+
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, TOOLS_RESULT)
+
+        other = http.server.HTTPServer(("127.0.0.1", 0), Elsewhere)
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        self.addCleanup(other.shutdown)
+        oport = other.server_address[1]
+
+        class Redirector(Base):
+            def do_POST(self):
+                self.read_method()
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{oport}/mcp")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        findings, evidence = self.probe(Redirector)
+        self.assertIn("REDIRECT-OFF-TARGET", ids(findings))
+        self.assertTrue(evidence, "probe_evidence must not be blank")
+        self.assertTrue(any("refused" in e for e in evidence), evidence)
 
 
 class DemoKeyIsNotTrustMaterial(unittest.TestCase):

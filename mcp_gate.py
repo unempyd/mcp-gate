@@ -3,8 +3,11 @@
 
 One question, measured one way: send `initialize`, then replay `tools/list`
 with no token, and read the reply. The finding requires positive proof — a
-JSON-RPC `result` echoing the request id — because JSON-RPC refuses inside a
-200 response as often as it refuses with a 401. HTTP status alone proves nothing.
+JSON-RPC `result` came back — because JSON-RPC refuses inside a 200 response as
+often as it refuses with a 401, and HTTP status alone proves nothing. The answer
+is matched to the request id when the server echoes one; when nothing echoes it,
+a result is preferred over an error, because failing toward "this endpoint served
+something" is the safe direction for a gate.
 
 Fault classes (only what has been observed in a real population):
   F1 auth-absence        endpoint returned a tools/list result with no token
@@ -22,7 +25,7 @@ import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 DEMO_KEY = "mcp-gate-demo-key-not-a-secret"
 PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {
@@ -175,7 +178,8 @@ def probe_http(url, timeout=10):
         except Exception as e:
             return None, {}, str(e), url, False
 
-    def off_target(e):
+    def off_target(stage, e):
+        evidence.append(f"{stage} -> refused: {e}")
         return [{"id": "REDIRECT-OFF-TARGET", "class": "F1", "status": "inconclusive",
                  "evidence": f"{e} — no posture claimed for {url}; re-run against that URL "
                              f"directly if you intended to probe it"}], evidence
@@ -186,7 +190,7 @@ def probe_http(url, timeout=10):
     try:
         s1, h1, b1, u1, _ = post(init)
     except BlockedRedirect as e:
-        return off_target(e)
+        return off_target("POST initialize", e)
     evidence.append(f"POST initialize -> {s1}")
     if s1 is None:
         return [{"id": "NET", "class": "F1", "status": "inconclusive",
@@ -226,7 +230,7 @@ def probe_http(url, timeout=10):
     try:
         s2, h2, b2, u2, truncated = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, followup)
     except BlockedRedirect as e:
-        return off_target(e)
+        return off_target("tokenless tools/list", e)
     evidence.append(f"tokenless tools/list -> {s2}")
     if truncated:
         evidence.append(f"response body hit the {BODY_SNIPPET}-byte read cap and was truncated")
@@ -307,24 +311,54 @@ def probe_http(url, timeout=10):
     return findings, evidence
 
 # ---------------- receipt ----------------
+class KeyUnavailable(Exception):
+    """No usable signing key. Signing or verifying with an empty key would
+    produce receipts anybody can forge, so this is refused rather than warned."""
+
 def _signing_key():
     """$MCP_GATE_KEY, else a per-machine key. The scheme is symmetric: a receipt
     verifies only where its key is present, which is why CI must set it explicitly."""
     key = os.environ.get("MCP_GATE_KEY")
     if key:
-        return key.strip()
+        key = key.strip()
+        if not key:
+            raise KeyUnavailable("MCP_GATE_KEY is set but blank")
+        return key
+
     kf = os.path.expanduser("~/.mcp-gate-key")
     if not os.path.exists(kf):
+        # O_CREAT|O_EXCL on the final path publishes the file before the bytes
+        # land, so a concurrent run could open it and read "". Write the key to a
+        # private temp file first and publish it with an atomic link, so another
+        # process sees either no file at all or a complete key.
+        tmp = f"{kf}.{os.getpid()}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            # 0600 at creation: no window in which the secret is world-readable.
-            fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            pass  # a concurrent first run won the race; read what it wrote
-        else:
             with os.fdopen(fd, "w") as fh:
                 fh.write(os.urandom(32).hex())
-    with open(kf, encoding="utf-8") as fh:
-        return fh.read().strip()
+            try:
+                os.link(tmp, kf)
+            except FileExistsError:
+                pass            # another run won; its key is already complete
+            except OSError:
+                os.replace(tmp, kf)   # filesystem without hardlinks
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    try:
+        with open(kf, encoding="utf-8") as fh:
+            key = fh.read().strip()
+    except OSError as e:
+        raise KeyUnavailable(f"cannot read {kf}: {e}") from None
+    if not key:
+        # A truncated or emptied key file reaches here too, not just a lost race.
+        raise KeyUnavailable(
+            f"{kf} is empty or truncated. Delete it and re-run, or set MCP_GATE_KEY. "
+            f"Signing with an empty key would produce forgeable receipts.")
+    return key
 
 def _canon(body):
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
@@ -363,7 +397,11 @@ def main():
     a = p.parse_args()
 
     if a.cmd == "verify-receipt":
-        ok, r = verify_receipt(a.receipt)
+        try:
+            ok, r = verify_receipt(a.receipt)
+        except KeyUnavailable as e:
+            print(f"cannot verify: {e}", file=sys.stderr)
+            return 2
         out = {"signature_valid": ok, "receipt_sha256": r.get("receipt_sha256"),
                "target": r.get("target"), "timestamp": r.get("timestamp")}
         try:
@@ -384,7 +422,11 @@ def main():
         return 2
 
     checks, ev = probe_http(a.target, timeout=a.timeout)
-    rc = receipt(a.target, checks, ev)
+    try:
+        rc = receipt(a.target, checks, ev)
+    except KeyUnavailable as e:
+        print(f"cannot sign a receipt: {e}", file=sys.stderr)
+        return 2
     if a.receipt_out:
         out = a.receipt_out
     else:

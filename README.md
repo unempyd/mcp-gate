@@ -89,7 +89,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/mcp-gate@v0.6.0
+- uses: unempyd/mcp-gate@v0.6.1
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.MCP_GATE_KEY }}
@@ -163,6 +163,13 @@ position — not full OAuth conformance.
   list to everyone else passes. This is reproduced in our own testing and is
   inherent to remote black-box probing — a receipt records what the endpoint
   returned *to us, then*, not what it returns to everyone.
+- **An endpoint can pass CI by redirecting away.** A 302 to a different host or
+  port reports `REDIRECT-OFF-TARGET` / inconclusive, which does not fail the
+  gate. That verdict is deliberate — a finding cannot be attributed to an origin
+  the caller did not name, and legitimate deployments redirect
+  `host/mcp` to `mcp.host/mcp`, so failing here would manufacture false
+  positives. The refusal and the URL are recorded in the receipt; re-run against
+  the destination if you meant to probe it.
 - **An endpoint can force an inconclusive result.** A response padded past the
   5 MB read cap is reported `RESPONSE-TRUNCATED` / inconclusive, and inconclusive
   findings do not fail the gate. The tool will not claim a fault it could not

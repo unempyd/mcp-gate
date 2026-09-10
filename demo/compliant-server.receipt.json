@@ -1,22 +1,22 @@
 {
  "schema": "mcp-gate/receipt@5",
- "tool_version": "0.6.0",
+ "tool_version": "0.6.1",
  "demo_key": true,
- "timestamp": "2026-09-10T10:53:46.758061+00:00",
- "target": "http://127.0.0.1:57130/mcp",
+ "timestamp": "2026-09-10T11:13:54.173762+00:00",
+ "target": "http://127.0.0.1:58287/mcp",
  "mode": "runtime",
  "checks": [
   {
    "id": "OAUTH-POSTURE",
    "class": "F2",
    "status": "pass",
-   "evidence": "PRM fetched: http://127.0.0.1:57130/.well-known/oauth-protected-resource -> keys=['authorization_servers', 'resource', 'scopes_supported']"
+   "evidence": "PRM fetched: http://127.0.0.1:58287/.well-known/oauth-protected-resource -> keys=['authorization_servers', 'resource', 'scopes_supported']"
   }
  ],
  "probe_evidence": [
   "POST initialize -> 401",
   "tokenless tools/list -> 401"
  ],
- "receipt_sha256": "34243e19864bdee2588386449840f82803cd2f45700e4a7782372ce4bf90faa7",
- "hmac_sha256": "44e52a4ac48b5c4650f81b0d713d040985e3e14577a559228116ed4a26001ec9"
+ "receipt_sha256": "fcdf5da799b05e00f62113fc9d6768b718934f74e79bfe50fde102ed0092e258",
+ "hmac_sha256": "55a87c0a669f00037788e5c1e7238ba34f4c55f515e4eb41950faaf6cade86f7"
 }
