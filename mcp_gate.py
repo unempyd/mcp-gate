@@ -22,13 +22,14 @@ import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
+DEMO_KEY = "mcp-gate-demo-key-not-a-secret"
 CLASSES = {
     "F1": "auth-absence (tools/list returned a result with no token)",
     "F2": "incomplete-oauth-rs (no followable RFC 9728 challenge, or PRM broken)",
 }
 PRM_MAX_BYTES = 256 * 1024
-BODY_SNIPPET = 65536
+BODY_SNIPPET = 5 * 1024 * 1024   # padding past this is an evasion, not an accident
 
 def hget(headers, name):
     """Case-insensitive header lookup (HTTP/2 lowercases everything)."""
@@ -37,30 +38,50 @@ def hget(headers, name):
             return v
     return None
 
-def parse_jsonrpc(body, content_type=""):
-    """Return the JSON-RPC object in a response body, or None if there isn't one.
+def collect_jsonrpc(body, content_type=""):
+    """Every JSON-RPC object in a response body, in order.
 
-    Streamable HTTP may answer either as a JSON body or as an SSE stream, so
-    both framings are unwrapped here.
+    Streamable HTTP answers as either a JSON body or an SSE stream, and either
+    may carry a batch, so a server can put a decoy ahead of the real answer.
+    Returning all of them lets the caller pick the one it actually asked for.
     """
-    text = (body or "").strip()
+    out, text = [], (body or "").strip()
+
+    def take(obj):
+        if isinstance(obj, list):
+            for o in obj:
+                take(o)
+        elif isinstance(obj, dict) and "jsonrpc" in obj:
+            out.append(obj)
+
     if "text/event-stream" in (content_type or "").lower() or text.startswith("data:"):
         for line in text.splitlines():
             if line.startswith("data:"):
                 try:
-                    obj = json.loads(line[5:].strip())
+                    take(json.loads(line[5:].strip()))
                 except ValueError:
                     continue
-                if isinstance(obj, dict) and "jsonrpc" in obj:
-                    return obj
-        return None
+        return out
     try:
-        obj = json.loads(text)
+        take(json.loads(text))
     except ValueError:
-        return None
-    if isinstance(obj, list):  # batch response
-        obj = next((o for o in obj if isinstance(o, dict) and "jsonrpc" in o), None)
-    return obj if isinstance(obj, dict) and "jsonrpc" in obj else None
+        return out
+    return out
+
+def answer_for(objs, want_id):
+    """The response to the request we sent.
+
+    Prefer the object echoing our id. If nothing echoes it, fall back to any
+    object at all — and prefer one carrying a result, because failing toward
+    "this endpoint served something" is the safe direction for a gate.
+    """
+    for o in objs:
+        if o.get("id") == want_id:
+            return o
+    for o in objs:
+        if "result" in o:
+            return o
+    return objs[0] if objs else None
 
 def _host_is_reachable_pivot(prm_host, probe_host):
     """True when fetching prm_host would reach somewhere the probed server should
@@ -85,6 +106,30 @@ def _host_is_reachable_pivot(prm_host, probe_host):
                 or ip.is_reserved or ip.is_multicast):
             return True
     return False
+
+class BlockedRedirect(Exception):
+    """A redirect hop pointed somewhere the scanned server should not send us."""
+
+class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """The scanned server controls every hop, not just the first one."""
+
+    def __init__(self, probe_host):
+        self.probe_host = probe_host
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parts = urllib.parse.urlsplit(newurl)
+        if parts.scheme.lower() not in ("http", "https"):
+            raise BlockedRedirect(f"redirect to non-http(s) URL: {newurl[:120]!r}")
+        if _host_is_reachable_pivot(parts.hostname, self.probe_host):
+            raise BlockedRedirect(f"redirect to a private or link-local address: {newurl[:120]!r}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def fetch_prm(prm_url, probe_host, timeout):
+    """Fetch protected-resource metadata, re-validating each redirect hop."""
+    opener = urllib.request.build_opener(_GuardedRedirectHandler(probe_host))
+    req = urllib.request.Request(prm_url, headers={"User-Agent": f"mcp-gate/{VERSION}"})
+    with opener.open(req, timeout=timeout) as r:
+        return json.loads(r.read(PRM_MAX_BYTES).decode("utf-8", "replace"))
 
 # ---------------- runtime probe (single-shot, unauthenticated) ----------------
 def probe_http(url, timeout=10):
@@ -132,7 +177,10 @@ def probe_http(url, timeout=10):
                           {"Mcp-Session-Id": sess} if sess else None)
     evidence.append(f"tokenless tools/list -> {s2}")
 
-    rpc = parse_jsonrpc(b2, hget(h2, "Content-Type"))
+    truncated = len(b2.encode("utf-8", "replace")) >= BODY_SNIPPET
+    if truncated:
+        evidence.append(f"response body hit the {BODY_SNIPPET}-byte read cap and was truncated")
+    rpc = answer_for(collect_jsonrpc(b2, hget(h2, "Content-Type")), 2)
     if s2 == 200 and rpc is not None and "result" in rpc:
         # Positive proof: the call succeeded without a token.
         result = rpc.get("result") or {}
@@ -158,6 +206,10 @@ def probe_http(url, timeout=10):
             findings.append({"id": "AUTH-REFUSED-NO-CHALLENGE", "class": "F2", "status": "fail",
                              "evidence": f"tools/list refused at the JSON-RPC layer ({detail}) with no "
                                          f"WWW-Authenticate header: a client cannot discover how to authenticate"})
+    elif s2 == 200 and truncated:
+        findings.append({"id": "RESPONSE-TRUNCATED", "class": "F1", "status": "inconclusive",
+                         "evidence": f"tools/list -> 200 but the body exceeded the {BODY_SNIPPET}-byte "
+                                     f"read cap and no JSON-RPC answer could be parsed; posture not observable"})
     elif s2 == 200:
         findings.append({"id": "NOT-MCP", "class": "F1", "status": "inconclusive",
                          "evidence": f"tools/list -> 200 but the body is not a JSON-RPC response "
@@ -187,15 +239,16 @@ def probe_http(url, timeout=10):
                                              f"refused unfetched: {prm_url[:120]!r}"})
             else:
                 try:
-                    req = urllib.request.Request(prm_url, headers={"User-Agent": f"mcp-gate/{VERSION}"})
-                    with urllib.request.urlopen(req, timeout=timeout) as r:
-                        prm = json.loads(r.read(PRM_MAX_BYTES).decode("utf-8", "replace"))
+                    prm = fetch_prm(prm_url, probe_host, timeout)
                     if not isinstance(prm, dict):
                         raise ValueError("PRM document is not a JSON object")
                     ok = "authorization_servers" in prm or "resource" in prm
                     findings.append({"id": "OAUTH-POSTURE", "class": "F2",
                                      "status": "pass" if ok else "fail",
                                      "evidence": f"PRM fetched: {prm_url} -> keys={sorted(prm)[:6]}"})
+                except BlockedRedirect as e:
+                    findings.append({"id": "PRM-PRIVATE-TARGET", "class": "F2", "status": "fail",
+                                     "evidence": f"resource_metadata {prm_url[:80]!r} {e}; refused unfetched"})
                 except Exception:
                     findings.append({"id": "PRM-UNREACHABLE", "class": "F2", "status": "fail",
                                      "evidence": f"resource_metadata advertised but unfetchable: {prm_url}"})
@@ -224,12 +277,20 @@ def _canon(body):
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 def receipt(target, checks, evidence):
-    body = {"schema": "mcp-gate/receipt@4", "tool_version": VERSION,
+    key = _signing_key()
+    if key == DEMO_KEY:
+        # This constant is published in the README so anyone can verify the demo
+        # fixtures. Signing with it would let anyone mint a receipt this verifier
+        # accepts, so receipts made with it are marked and never look authentic.
+        demo = True
+    else:
+        demo = False
+    body = {"schema": "mcp-gate/receipt@5", "tool_version": VERSION, "demo_key": demo,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "target": target, "mode": "runtime",
             "checks": checks, "probe_evidence": evidence}
     body["receipt_sha256"] = hashlib.sha256(_canon(body)).hexdigest()
-    body["hmac_sha256"] = hmac.new(_signing_key().encode(), _canon(body), hashlib.sha256).hexdigest()
+    body["hmac_sha256"] = hmac.new(key.encode(), _canon(body), hashlib.sha256).hexdigest()
     return body
 
 def verify_receipt(path):
@@ -254,8 +315,17 @@ def main():
 
     if a.cmd == "verify-receipt":
         ok, r = verify_receipt(a.receipt)
-        print(json.dumps({"signature_valid": ok, "receipt_sha256": r.get("receipt_sha256"),
-                          "target": r.get("target")}, indent=1))
+        out = {"signature_valid": ok, "receipt_sha256": r.get("receipt_sha256"),
+               "target": r.get("target"), "timestamp": r.get("timestamp")}
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(r["timestamp"])
+            out["age_seconds"] = int(age.total_seconds())
+        except Exception:
+            out["age_seconds"] = None
+        if r.get("demo_key"):
+            out["WARNING"] = ("signed with the published demo key: proves nothing about "
+                              "who produced it or what was probed")
+        print(json.dumps(out, indent=1))
         return 0 if ok else 1
 
     if urllib.parse.urlsplit(a.target).scheme.lower() not in ("http", "https"):

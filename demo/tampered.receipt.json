@@ -1,8 +1,9 @@
 {
- "schema": "mcp-gate/receipt@4",
- "tool_version": "0.4.0",
- "timestamp": "2026-09-10T08:27:03.691436+00:00",
- "target": "http://127.0.0.1:51037/mcp",
+ "schema": "mcp-gate/receipt@5",
+ "tool_version": "0.5.0",
+ "demo_key": true,
+ "timestamp": "2026-09-10T08:49:58.080671+00:00",
+ "target": "http://127.0.0.1:52165/mcp",
  "mode": "runtime",
  "checks": [
   {
@@ -16,6 +17,6 @@
   "POST initialize -> 200",
   "tokenless tools/list -> 200"
  ],
- "receipt_sha256": "6ee3c11914952c1f6ceaee6c8e34ba21abdf1a59fd3d3fbd28677c8ee754b298",
- "hmac_sha256": "cd4f2a1b84f8285070c0eecb54fe7d10d6af9238e4f9012ee17665c21eb6230a"
+ "receipt_sha256": "d10bdf99a253d3e95f1eec3b49778a9989d89a1e65805cc05861df6d6eeac6cc",
+ "hmac_sha256": "570605133778b7e2d63a4a11042c0f3cebae6d8e5b55ea3fe01aa55bca3f9e88"
 }

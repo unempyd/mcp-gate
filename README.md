@@ -18,8 +18,8 @@ is checked.
 
 The headline rate from that run is **suspended pending a re-measurement**: the
 probe of the day treated HTTP 200 as proof the tool list was served, and
-JSON-RPC routinely refuses *inside* a 200. v0.4.0 requires a JSON-RPC `result`
-before it will claim anything. What survives unqualified is that 25 endpoints
+JSON-RPC routinely refuses *inside* a 200. The probe now requires a JSON-RPC
+`result` echoing the request id before it will claim anything. What survives unqualified is that 25 endpoints
 refused and published resolvable RFC 9728 metadata, 4 refused with a broken or
 absent challenge, and one advertised OAuth correctly and then served its tools
 without a token anyway. See [EVIDENCE.md](EVIDENCE.md).
@@ -58,9 +58,22 @@ A receipt records the target, the checks, the raw probe evidence, and a
 timestamp — including what could not be determined.
 
 `hmac_sha256` signs the body with `$MCP_GATE_KEY`, falling back to a
-per-machine key at `~/.mcp-gate-key` (created 0600). The scheme is symmetric:
-**a receipt verifies only where its key is present.** Set `MCP_GATE_KEY`
-explicitly anywhere you intend to verify receipts later, including CI.
+per-machine key at `~/.mcp-gate-key` (created 0600).
+
+**What a receipt proves, exactly:** that someone holding the key produced this
+byte-for-byte content. Nothing else. The scheme is symmetric, so a party who
+can verify a receipt can also mint one — which means a receipt is tamper
+evidence for your own archive, *not* an attestation you can hand to a third
+party as proof. Two unrelated organisations cannot use it to distinguish an
+authentic result from a fabricated one, because doing so would require sharing
+the secret that lets either of them fabricate. If you need transferable proof,
+this design cannot give it to you; that would need public-key signatures and a
+key you publish.
+
+Receipts signed with the published demo key are marked `"demo_key": true` and
+the verifier warns about them, because that key is in this README and anyone
+can sign anything with it. Set `MCP_GATE_KEY` to a real secret anywhere you
+intend to verify receipts later, including CI.
 
 The receipts under `demo/` were produced against loopback servers in this
 repository's own tests and are signed with a published constant, so anyone can
@@ -76,7 +89,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/mcp-gate@v0.4.0
+- uses: unempyd/mcp-gate@v0.5.0
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.MCP_GATE_KEY }}
@@ -131,5 +144,19 @@ position — not full OAuth conformance.
   different host. Redirects are recorded in the receipt evidence.
 - Receipts are HMAC-signed, not PKI. Anyone holding the key can mint one; they
   are tamper-evidence for an archive, not third-party attestation.
+- **A receipt has no freshness.** It carries a timestamp and nothing binds it to
+  now, so a genuine passing receipt can be presented long after the posture
+  changed. `verify-receipt` reports `age_seconds`; decide your own staleness
+  policy. Nothing here proves an endpoint is *currently* closed.
+- **An endpoint can single out this prober.** The probe sends a `mcp-gate/...`
+  User-Agent from one IP; a server that returns a clean 401 to it and its tool
+  list to everyone else passes. This is reproduced in our own testing and is
+  inherent to remote black-box probing — a receipt records what the endpoint
+  returned *to us, then*, not what it returns to everyone.
+- **An endpoint can force an inconclusive result.** A response padded past the
+  5 MB read cap is reported `RESPONSE-TRUNCATED` / inconclusive, and inconclusive
+  findings do not fail the gate. The tool will not claim a fault it could not
+  observe, so a server that refuses to be readable is recorded as unread rather
+  than as safe. Read the findings, not just the exit code.
 - Probing sends unauthenticated requests to whatever URL you pass. Only probe
   endpoints you are authorised to probe.

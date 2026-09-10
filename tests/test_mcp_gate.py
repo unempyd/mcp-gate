@@ -384,11 +384,118 @@ class EvidenceIntegrity(ServerCase):
         self.assertNotIn("AUTH-OPEN", ids(findings))
         self.assertEqual(statuses(findings), {"inconclusive"})
 
-    def test_parse_jsonrpc_rejects_non_jsonrpc_json(self):
-        self.assertIsNone(gate.parse_jsonrpc('{"tools": []}'))
-        self.assertIsNone(gate.parse_jsonrpc("not json"))
-        self.assertIsNone(gate.parse_jsonrpc(""))
-        self.assertIsNotNone(gate.parse_jsonrpc('{"jsonrpc":"2.0","id":1,"result":{}}'))
+    def test_collect_jsonrpc_rejects_non_jsonrpc_json(self):
+        self.assertEqual(gate.collect_jsonrpc('{"tools": []}'), [])
+        self.assertEqual(gate.collect_jsonrpc("not json"), [])
+        self.assertEqual(gate.collect_jsonrpc(""), [])
+        self.assertEqual(len(gate.collect_jsonrpc('{"jsonrpc":"2.0","id":1,"result":{}}')), 1)
+
+
+class EvasionResistance(ServerCase):
+    """Each of these was a working evasion reproduced against v0.4.0."""
+
+    def test_decoy_error_in_first_sse_frame_does_not_hide_the_result(self):
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200,
+                           b'data: {"jsonrpc":"2.0","id":99,"error":{"code":-32001,"message":"no"}}\n\n'
+                           b'data: ' + TOOLS_RESULT + b'\n\n',
+                           content_type="text/event-stream")
+
+        self.assertIn("AUTH-OPEN", ids(self.probe(H)[0]))
+
+    def test_decoy_error_first_in_a_batch_does_not_hide_the_result(self):
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, b'[{"jsonrpc":"2.0","id":99,"error":{"code":-32001,"message":"no"}},'
+                                b'{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"x"}]}}]')
+
+        self.assertIn("AUTH-OPEN", ids(self.probe(H)[0]))
+
+    def test_answer_is_selected_by_request_id(self):
+        objs = [{"jsonrpc": "2.0", "id": 99, "error": {"code": -1}},
+                {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}}]
+        self.assertIn("result", gate.answer_for(objs, 2))
+
+    def test_answer_falls_back_toward_detection_when_no_id_matches(self):
+        """If nothing echoes our id, prefer a result: fail toward reporting."""
+        objs = [{"jsonrpc": "2.0", "id": 7, "error": {"code": -1}},
+                {"jsonrpc": "2.0", "id": 8, "result": {"tools": []}}]
+        self.assertIn("result", gate.answer_for(objs, 2))
+
+    def test_truncated_body_is_reported_not_silently_unparseable(self):
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, b'{"jsonrpc":"2.0","id":2,"result":{"pad":"'
+                                + b"A" * (gate.BODY_SNIPPET + 4096) + b'","tools":[]}}')
+
+        findings, evidence = self.probe(H)
+        self.assertIn("RESPONSE-TRUNCATED", ids(findings))
+        self.assertEqual(statuses(findings), {"inconclusive"})
+        self.assertTrue(any("read cap" in e for e in evidence))
+
+    def test_prm_redirect_to_a_private_address_is_blocked(self):
+        class Internal(Base):
+            def do_GET(self):
+                self.reply(200, b'{"authorization_servers":["INTERNAL"],"resource":"x"}')
+
+        internal = http.server.HTTPServer(("127.0.0.1", 0), Internal)
+        threading.Thread(target=internal.serve_forever, daemon=True).start()
+        self.addCleanup(internal.shutdown)
+        iport = internal.server_address[1]
+
+        class Redirector(Base):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{iport}/secret")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        redir = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+        threading.Thread(target=redir.serve_forever, daemon=True).start()
+        self.addCleanup(redir.shutdown)
+        with self.assertRaises(gate.BlockedRedirect):
+            gate.fetch_prm(f"http://127.0.0.1:{redir.server_address[1]}/prm", "victim.example", 5)
+
+
+class DemoKeyIsNotTrustMaterial(unittest.TestCase):
+    def _with_key(self, value, fn):
+        had = os.environ.get("MCP_GATE_KEY")
+        os.environ["MCP_GATE_KEY"] = value
+        try:
+            return fn()
+        finally:
+            if had is None:
+                os.environ.pop("MCP_GATE_KEY", None)
+            else:
+                os.environ["MCP_GATE_KEY"] = had
+
+    def test_receipts_signed_with_the_published_key_are_marked(self):
+        body = self._with_key(gate.DEMO_KEY, lambda: gate.receipt("https://x/mcp", [], []))
+        self.assertTrue(body["demo_key"])
+
+    def test_a_real_key_produces_an_unmarked_receipt(self):
+        body = self._with_key("an-actual-private-key", lambda: gate.receipt("https://x/mcp", [], []))
+        self.assertFalse(body["demo_key"])
+
+    def test_verifier_warns_loudly_about_a_demo_signed_receipt(self):
+        body = self._with_key(gate.DEMO_KEY, lambda: gate.receipt(
+            "https://victim.example/mcp",
+            [{"id": "OAUTH-POSTURE", "class": "F2", "status": "pass", "evidence": "fabricated"}], []))
+        tmp = tempfile.mkdtemp()
+        p = os.path.join(tmp, "forged.json")
+        json.dump(body, open(p, "w"))
+        out = run_cli("verify-receipt", p).stdout
+        self.assertIn('"signature_valid": true', out)
+        self.assertIn("WARNING", out)
+        self.assertIn("proves nothing", out)
+
+    def test_verifier_reports_receipt_age(self):
+        out = run_cli("verify-receipt", os.path.join(ROOT, "demo", "open-server.receipt.json")).stdout
+        self.assertIn("age_seconds", out)
 
 
 class Receipts(unittest.TestCase):
@@ -416,7 +523,7 @@ class Receipts(unittest.TestCase):
 
     def test_receipt_records_the_probe_evidence(self):
         body = json.load(open(os.path.join(ROOT, "demo", "open-server.receipt.json")))
-        self.assertEqual(body["schema"], "mcp-gate/receipt@4")
+        self.assertEqual(body["schema"], "mcp-gate/receipt@5")
         self.assertEqual(body["mode"], "runtime")
         self.assertTrue(any("tools/list" in e for e in body["probe_evidence"]))
 
