@@ -21,11 +21,11 @@ like any other. See EVIDENCE.md for the measurement behind this scope.
 The receipt records what was observed. Whether an open endpoint is a fault or
 an intentionally public service is a judgement this tool does not make.
 """
-import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys
+import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys, tempfile
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 DEMO_KEY = "mcp-gate-demo-key-not-a-secret"
 PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {
@@ -331,8 +331,10 @@ def _signing_key():
         # land, so a concurrent run could open it and read "". Write the key to a
         # private temp file first and publish it with an atomic link, so another
         # process sees either no file at all or a complete key.
-        tmp = f"{kf}.{os.getpid()}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # mkstemp, not a pid-derived name: two threads in one process share a pid
+        # and would collide on it. It also creates at 0600 for us.
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(kf) or ".",
+                                   prefix=".mcp-gate-key.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as fh:
                 fh.write(os.urandom(32).hex())
@@ -341,7 +343,15 @@ def _signing_key():
             except FileExistsError:
                 pass            # another run won; its key is already complete
             except OSError:
-                os.replace(tmp, kf)   # filesystem without hardlinks
+                # No hardlinks on this filesystem. os.replace is atomic but
+                # unconditional, so it would overwrite a key another process had
+                # already handed out, leaving that process's receipts permanently
+                # unverifiable. The existence re-check narrows that to the gap
+                # between these two lines; it does not close it. Closing it needs
+                # locking, and no filesystem where this branch runs has been
+                # observed — hardlinks are available everywhere this is used.
+                if not os.path.exists(kf):
+                    os.replace(tmp, kf)
         finally:
             try:
                 os.unlink(tmp)
@@ -421,12 +431,16 @@ def main():
               f"start its HTTP mode and probe that URL.", file=sys.stderr)
         return 2
 
-    checks, ev = probe_http(a.target, timeout=a.timeout)
     try:
-        rc = receipt(a.target, checks, ev)
+        # Before the probe, not after: a run that cannot be recorded should not
+        # send unauthenticated traffic to somebody else's endpoint first.
+        _signing_key()
     except KeyUnavailable as e:
         print(f"cannot sign a receipt: {e}", file=sys.stderr)
         return 2
+
+    checks, ev = probe_http(a.target, timeout=a.timeout)
+    rc = receipt(a.target, checks, ev)
     if a.receipt_out:
         out = a.receipt_out
     else:

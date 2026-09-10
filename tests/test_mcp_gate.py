@@ -596,6 +596,55 @@ class ReviewFindings(ServerCase):
             if had is not None:
                 os.environ["MCP_GATE_KEY"] = had
 
+    def test_concurrent_threads_get_one_complete_key(self):
+        """A pid-derived temp name collided between threads in one process."""
+        home = tempfile.mkdtemp()
+        real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        os.environ["HOME"] = home
+        try:
+            keys, errors, start = [], [], threading.Barrier(12)
+
+            def run():
+                try:
+                    start.wait()
+                    keys.append(gate._signing_key())
+                except Exception as e:
+                    errors.append(f"{type(e).__name__}: {e}")
+
+            threads = [threading.Thread(target=run) for _ in range(12)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            self.assertEqual(len(set(keys)), 1, keys)
+            on_disk = open(os.path.join(home, ".mcp-gate-key")).read().strip()
+            self.assertTrue(all(k == on_disk for k in keys))
+            self.assertEqual([f for f in os.listdir(home) if f.endswith(".tmp")], [])
+        finally:
+            if real_home is not None:
+                os.environ["HOME"] = real_home
+            if had is not None:
+                os.environ["MCP_GATE_KEY"] = had
+
+    def test_no_traffic_is_sent_when_the_key_is_unusable(self):
+        """A run that cannot be recorded must not probe somebody else's endpoint."""
+        contacted = []
+
+        class H(Base):
+            def do_POST(self):
+                contacted.append(self.path)
+                self.read_method()
+                self.reply(200, TOOLS_RESULT)
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        proc = run_cli("check", f"http://127.0.0.1:{srv.server_address[1]}/mcp", key="   ")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("cannot sign a receipt", proc.stderr)
+        self.assertEqual(contacted, [], "the endpoint was probed despite an unusable key")
+
     def test_blank_env_key_is_refused(self):
         had = os.environ.get("MCP_GATE_KEY")
         os.environ["MCP_GATE_KEY"] = "   "
