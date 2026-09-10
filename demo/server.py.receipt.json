@@ -1,0 +1,18 @@
+{
+ "schema": "mcp-gate/receipt@1",
+ "tool_version": "0.1.1",
+ "timestamp": "2026-09-10T04:55:55.461822+00:00",
+ "target": "demo/server.py",
+ "mode": "source",
+ "checks": [
+  {
+   "id": "NO-OAUTH",
+   "class": "F1",
+   "status": "fail",
+   "evidence": "no OAuth/token verification surface in source"
+  }
+ ],
+ "fixes": [],
+ "artifact_sha256": "e2a258ab8fc4933f5956fb879163a622b65a0aca62fe4be6cdd6b7796ecd8f55",
+ "hmac_sha256": "ad06b94264ecf7de3549f6ba9037ef557126c4490406e4f96b6a2a36627e5b2b"
+}

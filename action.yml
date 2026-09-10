@@ -1,0 +1,40 @@
+name: 'MCP Gate'
+description: >
+  Scan an MCP server (source path or live endpoint) against the residual
+  2026-07-28 fault classes, scaffold/fix where safe, and emit a signed receipt.
+  Runs the same single-file tool; no new parts.
+branding:
+  icon: 'shield'
+  color: 'blue'
+inputs:
+  target:
+    description: 'Path to MCP server source (relative to workspace) or https endpoint URL'
+    required: true
+  receipt-out:
+    description: 'Optional receipt output path (default: next to target, or mcp-gate-receipts/ for URLs)'
+    required: false
+  min-gate-key:
+    description: 'Optional HMAC key for receipt signing (use a repository secret)'
+    required: false
+outputs:
+  receipt:
+    description: 'Path of the signed receipt JSON'
+    value: ${{ steps.gate.outputs.receipt }}
+  failures:
+    description: 'Number of failing checks (0 = pass)'
+    value: ${{ steps.gate.outputs.failures }}
+runs:
+  using: 'composite'
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        MCP_GATE_KEY: ${{ inputs['min-gate-key'] }}
+      run: |
+        ARGS=("${{ inputs.target }}")
+        if [ -n "${{ inputs.receipt-out }}" ]; then ARGS+=(--receipt-out "${{ inputs.receipt-out }}"); fi
+        python3 "$GITHUB_ACTION_PATH/mcp_gate.py" check "${ARGS[@]}" | tee mcp-gate-result.json
+        FAILURES=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['failures'])")
+        RECEIPT=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['receipt'])")
+        echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
+        echo "receipt=$RECEIPT" >> "$GITHUB_OUTPUT"

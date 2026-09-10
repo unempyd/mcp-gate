@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+receipts/
+mcp-gate-receipts/
+*.receipt.json
+!demo/*.receipt.json

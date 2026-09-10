@@ -1,0 +1,42 @@
+{
+ "schema": "mcp-gate/receipt@1",
+ "tool_version": "0.1.1",
+ "timestamp": "2026-09-10T04:55:55.630007+00:00",
+ "target": "demo/broken.py",
+ "mode": "source",
+ "checks": [
+  {
+   "id": "DCR-ENABLED",
+   "class": "F6",
+   "status": "fail",
+   "evidence": "dynamic client registration present (2026-07-28: DCR deprecated, CIMD path; default must be off): matched 'dynamic_client_registration' at char 580"
+  },
+  {
+   "id": "SESSION-KEYED-STATE",
+   "class": "F3",
+   "status": "fail",
+   "evidence": "state keyed on session ids in a stateless protocol (cross-tenant reuse class): matched 'session_id' at char 79"
+  },
+  {
+   "id": "NO-IDEMPOTENCY",
+   "class": "F4",
+   "status": "fail",
+   "evidence": "mutation-style tool handlers, no idempotency-key handling in code"
+  },
+  {
+   "id": "FSTRING-URL",
+   "class": "F5",
+   "status": "fail",
+   "evidence": "unverified input interpolated into URLs (SSRF class): matched 'requests.get(f\"' at char 101"
+  },
+  {
+   "id": "SHELL-FSTRING",
+   "class": "F5",
+   "status": "fail",
+   "evidence": "shell execution with interpolated input (injection class): matched 'os.system(f\"' at char 437"
+  }
+ ],
+ "fixes": [],
+ "artifact_sha256": "fc51290b872d09320fc1341b5ac8bd46c73da97c223b8a5841a269ca336f83cc",
+ "hmac_sha256": "a12b917127f8e943530e459c4999cac481687acc0e3c9d7e673557043b9bbe42"
+}

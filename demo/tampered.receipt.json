@@ -1,0 +1,1 @@
+{"schema": "mcp-gate/receipt@1", "tool_version": "0.1.0", "timestamp": "2026-09-10T03:07:20.618393+00:00", "target": "demo/broken.py", "mode": "source", "checks": [], "fixes": [], "artifact_sha256": "98ffe4cd4f48d352aed8444f38c2d960d7e8640042b64bcdb4522775ec9909db", "hmac_sha256": "d1494f656bea1fcf649aae44e72ec0e5452cf40f1588b2365bb6c877b91a0153"}
