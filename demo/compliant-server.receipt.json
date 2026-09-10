@@ -1,0 +1,21 @@
+{
+ "schema": "mcp-gate/receipt@3",
+ "tool_version": "0.3.0",
+ "timestamp": "2026-09-10T08:11:44.573193+00:00",
+ "target": "http://127.0.0.1:50241/mcp",
+ "mode": "runtime",
+ "checks": [
+  {
+   "id": "OAUTH-POSTURE",
+   "class": "F2",
+   "status": "pass",
+   "evidence": "PRM fetched: http://127.0.0.1:50241/.well-known/oauth-protected-resource -> keys=['authorization_servers', 'resource', 'scopes_supported']"
+  }
+ ],
+ "probe_evidence": [
+  "POST initialize -> 401",
+  "tokenless tools/list -> 401"
+ ],
+ "receipt_sha256": "b3683e609b9c1d9a28f1fcb9f6b19e3d201351b4799302f21a5153e9f429ce81",
+ "hmac_sha256": "b439a187fee726a9294d361c19e882565fc0b345b8169ea3aedaee43e2ebc8cc"
+}

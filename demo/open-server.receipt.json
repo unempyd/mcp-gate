@@ -8,8 +8,8 @@
   {
    "id": "AUTH-OPEN",
    "class": "F1",
-   "status": "pass",
-   "evidence": "edited by hand after signing"
+   "status": "fail",
+   "evidence": "tools/list answered 200 with no token (chained replay; initialize -> 200)"
   }
  ],
  "probe_evidence": [

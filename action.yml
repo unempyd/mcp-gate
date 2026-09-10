@@ -1,17 +1,17 @@
 name: 'MCP Gate'
 description: >
-  Scan an MCP server (source path or live endpoint) against the residual
-  2026-07-28 fault classes, scaffold/fix where safe, and emit a signed receipt.
-  Runs the same single-file tool; no new parts.
+  Probe a deployed MCP endpoint and fail the build if it serves its tool list
+  without authentication, or refuses without a usable RFC 9728 challenge.
+  Emits a signed receipt of exactly what was observed.
 branding:
   icon: 'shield'
   color: 'blue'
 inputs:
   target:
-    description: 'Path to MCP server source (relative to workspace) or https endpoint URL'
+    description: 'http(s) URL of the MCP endpoint to probe'
     required: true
   receipt-out:
-    description: 'Optional receipt output path (default: next to target, or mcp-gate-receipts/ for URLs)'
+    description: 'Optional receipt output path (default: mcp-gate-receipts/)'
     required: false
   gate-key:
     description: >
@@ -50,8 +50,8 @@ runs:
           echo "mcp-gate: target error" >&2
           exit 2
         fi
-        FAILURES=$(python3 -c "import json,sys;print(json.load(open('mcp-gate-result.json'))['failures'])")
-        RECEIPT=$(python3 -c "import json,sys;print(json.load(open('mcp-gate-result.json'))['receipt'])")
+        FAILURES=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['failures'])")
+        RECEIPT=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['receipt'])")
         echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
         echo "receipt=$RECEIPT" >> "$GITHUB_OUTPUT"
         exit "$GATE_RC"
