@@ -1,4 +1,4 @@
-# mcp-gate
+# X190
 
 Does this MCP endpoint enforce authentication?
 
@@ -33,9 +33,9 @@ F2  incomplete-oauth-rs  refused, but with no RFC 9728 challenge a client could
 ## Usage
 
 ```bash
-python3 mcp_gate.py check https://host/mcp        # probe -> signed receipt
-python3 mcp_gate.py check http://127.0.0.1:3000/mcp
-python3 mcp_gate.py verify-receipt x.receipt.json
+python3 X190.py check https://host/mcp        # probe -> signed receipt
+python3 X190.py check http://127.0.0.1:3000/mcp
+python3 X190.py verify-receipt x.receipt.json
 ```
 
 Exit codes: `0` = pass, or inconclusive only; `1` = at least one fault;
@@ -57,8 +57,8 @@ any other. The fault is the same fault; only the discovery is different.
 A receipt records the target, the checks, the raw probe evidence, and a
 timestamp — including what could not be determined.
 
-`hmac_sha256` signs the body with `$MCP_GATE_KEY`, falling back to a
-per-machine key at `~/.mcp-gate-key` (created 0600).
+`hmac_sha256` signs the body with `$X190_KEY`, falling back to a
+per-machine key at `~/.X190-key` (created 0600).
 
 **What a receipt proves, exactly:** that someone holding the key produced this
 byte-for-byte content. Nothing else. The scheme is symmetric, so a party who
@@ -72,7 +72,7 @@ key you publish.
 
 Receipts signed with the published demo key are marked `"demo_key": true` and
 the verifier warns about them, because that key is in this README and anyone
-can sign anything with it. Set `MCP_GATE_KEY` to a real secret anywhere you
+can sign anything with it. Set `X190_KEY` to a real secret anywhere you
 intend to verify receipts later, including CI.
 
 The receipts under `demo/` were produced against loopback servers in this
@@ -80,8 +80,8 @@ repository's own tests and are signed with a published constant, so anyone can
 verify them:
 
 ```bash
-MCP_GATE_KEY=mcp-gate-demo-key-not-a-secret python3 mcp_gate.py verify-receipt demo/open-server.receipt.json
-MCP_GATE_KEY=mcp-gate-demo-key-not-a-secret python3 mcp_gate.py verify-receipt demo/tampered.receipt.json  # -> false, exit 1
+X190_KEY=X190-demo-key-not-a-secret python3 X190.py verify-receipt demo/open-server.receipt.json
+X190_KEY=X190-demo-key-not-a-secret python3 X190.py verify-receipt demo/tampered.receipt.json  # -> false, exit 1
 ```
 
 That key is a demo constant, not a secret.
@@ -89,10 +89,10 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/mcp-gate@v0.6.1
+- uses: unempyd/X190@v0.7.0
   with:
     target: https://your-host/mcp
-    gate-key: ${{ secrets.MCP_GATE_KEY }}
+    gate-key: ${{ secrets.X190_KEY }}
 ```
 
 The step fails the build when a fault is found. Read
@@ -158,7 +158,7 @@ position — not full OAuth conformance.
   now, so a genuine passing receipt can be presented long after the posture
   changed. `verify-receipt` reports `age_seconds`; decide your own staleness
   policy. Nothing here proves an endpoint is *currently* closed.
-- **An endpoint can single out this prober.** The probe sends a `mcp-gate/...`
+- **An endpoint can single out this prober.** The probe sends a `X190/...`
   User-Agent from one IP; a server that returns a clean 401 to it and its tool
   list to everyone else passes. This is reproduced in our own testing and is
   inherent to remote black-box probing — a receipt records what the endpoint

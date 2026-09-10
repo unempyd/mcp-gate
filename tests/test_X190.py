@@ -1,4 +1,4 @@
-"""Regression suite for mcp-gate. Stdlib only: python3 -m unittest discover tests
+"""Regression suite for X190. Stdlib only: python3 -m unittest discover tests
 
 The tool makes one accusation, so most of these tests are about the two ways it
 could be wrong: calling a server open when it refused, or calling it safe when
@@ -17,17 +17,17 @@ import unittest
 import importlib.util
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GATE_PATH = os.path.join(ROOT, "mcp_gate.py")
-_spec = importlib.util.spec_from_file_location("mcp_gate", GATE_PATH)
+GATE_PATH = os.path.join(ROOT, "X190.py")
+_spec = importlib.util.spec_from_file_location("X190", GATE_PATH)
 gate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gate)
 
-DEMO_KEY = "mcp-gate-demo-key-not-a-secret"
+DEMO_KEY = "X190-demo-key-not-a-secret"
 TOOLS_RESULT = b'{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"list_items"},{"name":"delete_item"}]}}'
 
 
 def run_cli(*args, key=DEMO_KEY):
-    env = dict(os.environ, MCP_GATE_KEY=key)
+    env = dict(os.environ, X190_KEY=key)
     return subprocess.run([sys.executable, GATE_PATH, *args],
                           capture_output=True, text=True, env=env)
 
@@ -558,10 +558,10 @@ class ReviewFindings(ServerCase):
         """The exact reviewer repro: the winner has created the file but not yet
         written it, so the loser used to read "" and sign forgeable receipts."""
         home = tempfile.mkdtemp()
-        real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        real_home, had = os.environ.get("HOME"), os.environ.pop("X190_KEY", None)
         os.environ["HOME"] = home
         try:
-            kf = os.path.join(home, ".mcp-gate-key")
+            kf = os.path.join(home, ".X190-key")
             fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # created, not written
             try:
                 with self.assertRaises(gate.KeyUnavailable):
@@ -572,19 +572,19 @@ class ReviewFindings(ServerCase):
             if real_home is not None:
                 os.environ["HOME"] = real_home
             if had is not None:
-                os.environ["MCP_GATE_KEY"] = had
+                os.environ["X190_KEY"] = had
 
     def test_signing_key_is_published_atomically(self):
         """A reader must see either no file or a complete 64-hex key, never a
         half-written one."""
         home = tempfile.mkdtemp()
-        real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        real_home, had = os.environ.get("HOME"), os.environ.pop("X190_KEY", None)
         os.environ["HOME"] = home
         try:
             key = gate._signing_key()
             self.assertEqual(len(key), 64)
             int(key, 16)
-            kf = os.path.join(home, ".mcp-gate-key")
+            kf = os.path.join(home, ".X190-key")
             self.assertFalse(os.stat(kf).st_mode & (stat.S_IRWXG | stat.S_IRWXO))
             # No temp file is left lying around.
             self.assertEqual([f for f in os.listdir(home) if f.endswith(".tmp")], [])
@@ -594,12 +594,12 @@ class ReviewFindings(ServerCase):
             if real_home is not None:
                 os.environ["HOME"] = real_home
             if had is not None:
-                os.environ["MCP_GATE_KEY"] = had
+                os.environ["X190_KEY"] = had
 
     def test_concurrent_threads_get_one_complete_key(self):
         """A pid-derived temp name collided between threads in one process."""
         home = tempfile.mkdtemp()
-        real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        real_home, had = os.environ.get("HOME"), os.environ.pop("X190_KEY", None)
         os.environ["HOME"] = home
         try:
             keys, errors, start = [], [], threading.Barrier(12)
@@ -618,14 +618,14 @@ class ReviewFindings(ServerCase):
                 t.join()
             self.assertEqual(errors, [])
             self.assertEqual(len(set(keys)), 1, keys)
-            on_disk = open(os.path.join(home, ".mcp-gate-key")).read().strip()
+            on_disk = open(os.path.join(home, ".X190-key")).read().strip()
             self.assertTrue(all(k == on_disk for k in keys))
             self.assertEqual([f for f in os.listdir(home) if f.endswith(".tmp")], [])
         finally:
             if real_home is not None:
                 os.environ["HOME"] = real_home
             if had is not None:
-                os.environ["MCP_GATE_KEY"] = had
+                os.environ["X190_KEY"] = had
 
     def test_no_traffic_is_sent_when_the_key_is_unusable(self):
         """A run that cannot be recorded must not probe somebody else's endpoint."""
@@ -646,16 +646,16 @@ class ReviewFindings(ServerCase):
         self.assertEqual(contacted, [], "the endpoint was probed despite an unusable key")
 
     def test_blank_env_key_is_refused(self):
-        had = os.environ.get("MCP_GATE_KEY")
-        os.environ["MCP_GATE_KEY"] = "   "
+        had = os.environ.get("X190_KEY")
+        os.environ["X190_KEY"] = "   "
         try:
             with self.assertRaises(gate.KeyUnavailable):
                 gate._signing_key()
         finally:
             if had is None:
-                os.environ.pop("MCP_GATE_KEY", None)
+                os.environ.pop("X190_KEY", None)
             else:
-                os.environ["MCP_GATE_KEY"] = had
+                os.environ["X190_KEY"] = had
 
     def test_cli_refuses_rather_than_tracebacks_on_an_empty_key(self):
         tmp = tempfile.mkdtemp()
@@ -698,15 +698,15 @@ class ReviewFindings(ServerCase):
 
 class DemoKeyIsNotTrustMaterial(unittest.TestCase):
     def _with_key(self, value, fn):
-        had = os.environ.get("MCP_GATE_KEY")
-        os.environ["MCP_GATE_KEY"] = value
+        had = os.environ.get("X190_KEY")
+        os.environ["X190_KEY"] = value
         try:
             return fn()
         finally:
             if had is None:
-                os.environ.pop("MCP_GATE_KEY", None)
+                os.environ.pop("X190_KEY", None)
             else:
-                os.environ["MCP_GATE_KEY"] = had
+                os.environ["X190_KEY"] = had
 
     def test_receipts_signed_with_the_published_key_are_marked(self):
         body = self._with_key(gate.DEMO_KEY, lambda: gate.receipt("https://x/mcp", [], []))
@@ -758,23 +758,23 @@ class Receipts(unittest.TestCase):
 
     def test_receipt_records_the_probe_evidence(self):
         body = json.load(open(os.path.join(ROOT, "demo", "open-server.receipt.json")))
-        self.assertEqual(body["schema"], "mcp-gate/receipt@5")
+        self.assertEqual(body["schema"], "X190/receipt@5")
         self.assertEqual(body["mode"], "runtime")
         self.assertTrue(any("tools/list" in e for e in body["probe_evidence"]))
 
     def test_generated_key_is_not_group_or_world_readable(self):
         home = tempfile.mkdtemp()
-        real_home, had_key = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        real_home, had_key = os.environ.get("HOME"), os.environ.pop("X190_KEY", None)
         os.environ["HOME"] = home
         try:
             gate._signing_key()
-            mode = os.stat(os.path.join(home, ".mcp-gate-key")).st_mode
+            mode = os.stat(os.path.join(home, ".X190-key")).st_mode
             self.assertFalse(mode & (stat.S_IRWXG | stat.S_IRWXO), oct(mode))
         finally:
             if real_home is not None:
                 os.environ["HOME"] = real_home
             if had_key is not None:
-                os.environ["MCP_GATE_KEY"] = had_key
+                os.environ["X190_KEY"] = had_key
 
 
 class Cli(unittest.TestCase):

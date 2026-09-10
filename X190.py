@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mcp-gate: did this MCP endpoint hand its tool list to an unauthenticated caller?
+"""X190: did this MCP endpoint hand its tool list to an unauthenticated caller?
 
 One question, measured one way: send `initialize`, then replay `tools/list`
 with no token, and read the reply. The finding requires positive proof — a
@@ -25,8 +25,8 @@ import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys, tempfile
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.6.2"
-DEMO_KEY = "mcp-gate-demo-key-not-a-secret"
+VERSION = "0.7.0"
+DEMO_KEY = "X190-demo-key-not-a-secret"
 PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {
     "F1": "auth-absence (tools/list returned a result with no token)",
@@ -146,7 +146,7 @@ def fetch_prm(prm_url, probe_host, timeout):
     Cross-host is allowed here: RFC 9728 metadata may legitimately be served
     somewhere other than the resource. Private targets are not.
     """
-    req = urllib.request.Request(prm_url, headers={"User-Agent": f"mcp-gate/{VERSION}"})
+    req = urllib.request.Request(prm_url, headers={"User-Agent": f"X190/{VERSION}"})
     with guarded_opener(probe_host).open(req, timeout=timeout) as r:
         return json.loads(r.read(PRM_MAX_BYTES).decode("utf-8", "replace"))
 
@@ -163,7 +163,7 @@ def probe_http(url, timeout=10):
         req = urllib.request.Request(url, data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json",
                      "Accept": "application/json, text/event-stream",
-                     "User-Agent": f"mcp-gate/{VERSION} (correctness probe)", **(extra or {})})
+                     "User-Agent": f"X190/{VERSION} (correctness probe)", **(extra or {})})
         try:
             with opener.open(req, timeout=timeout) as r:
                 raw = r.read(BODY_SNIPPET + 1)
@@ -186,7 +186,7 @@ def probe_http(url, timeout=10):
 
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-                       "clientInfo": {"name": "mcp-gate", "version": VERSION}}}
+                       "clientInfo": {"name": "X190", "version": VERSION}}}
     try:
         s1, h1, b1, u1, _ = post(init)
     except BlockedRedirect as e:
@@ -316,16 +316,16 @@ class KeyUnavailable(Exception):
     produce receipts anybody can forge, so this is refused rather than warned."""
 
 def _signing_key():
-    """$MCP_GATE_KEY, else a per-machine key. The scheme is symmetric: a receipt
+    """$X190_KEY, else a per-machine key. The scheme is symmetric: a receipt
     verifies only where its key is present, which is why CI must set it explicitly."""
-    key = os.environ.get("MCP_GATE_KEY")
+    key = os.environ.get("X190_KEY")
     if key:
         key = key.strip()
         if not key:
-            raise KeyUnavailable("MCP_GATE_KEY is set but blank")
+            raise KeyUnavailable("X190_KEY is set but blank")
         return key
 
-    kf = os.path.expanduser("~/.mcp-gate-key")
+    kf = os.path.expanduser("~/.X190-key")
     if not os.path.exists(kf):
         # O_CREAT|O_EXCL on the final path publishes the file before the bytes
         # land, so a concurrent run could open it and read "". Write the key to a
@@ -334,7 +334,7 @@ def _signing_key():
         # mkstemp, not a pid-derived name: two threads in one process share a pid
         # and would collide on it. It also creates at 0600 for us.
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(kf) or ".",
-                                   prefix=".mcp-gate-key.", suffix=".tmp")
+                                   prefix=".X190-key.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as fh:
                 fh.write(os.urandom(32).hex())
@@ -366,7 +366,7 @@ def _signing_key():
     if not key:
         # A truncated or emptied key file reaches here too, not just a lost race.
         raise KeyUnavailable(
-            f"{kf} is empty or truncated. Delete it and re-run, or set MCP_GATE_KEY. "
+            f"{kf} is empty or truncated. Delete it and re-run, or set X190_KEY. "
             f"Signing with an empty key would produce forgeable receipts.")
     return key
 
@@ -378,7 +378,7 @@ def receipt(target, checks, evidence):
     # DEMO_KEY is published in the README so anyone can verify the demo fixtures.
     # Signing with it would let anyone mint a receipt this verifier accepts, so
     # receipts made with it are marked and never look authentic.
-    body = {"schema": "mcp-gate/receipt@5", "tool_version": VERSION, "demo_key": key == DEMO_KEY,
+    body = {"schema": "X190/receipt@5", "tool_version": VERSION, "demo_key": key == DEMO_KEY,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "target": target, "mode": "runtime",
             "checks": checks, "probe_evidence": evidence}
@@ -396,7 +396,7 @@ def verify_receipt(path):
 # ---------------- CLI ----------------
 def main():
     p = argparse.ArgumentParser(
-        prog="mcp-gate", description="Did this MCP endpoint serve its tool list without a token?")
+        prog="X190", description="Did this MCP endpoint serve its tool list without a token?")
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check", help="probe an MCP endpoint URL")
     c.add_argument("target", help="http(s) URL of the MCP endpoint")
@@ -427,7 +427,7 @@ def main():
 
     if urllib.parse.urlsplit(a.target).scheme.lower() not in ("http", "https"):
         print(f"target must be an http(s) MCP endpoint URL, got: {a.target}\n"
-              f"mcp-gate probes running endpoints. If a server is distributed for stdio,\n"
+              f"X190 probes running endpoints. If a server is distributed for stdio,\n"
               f"start its HTTP mode and probe that URL.", file=sys.stderr)
         return 2
 
@@ -444,7 +444,7 @@ def main():
     if a.receipt_out:
         out = a.receipt_out
     else:
-        rdir = os.path.abspath("mcp-gate-receipts")
+        rdir = os.path.abspath("X190-receipts")
         os.makedirs(rdir, exist_ok=True)
         out = os.path.join(rdir, re.sub(r"[^A-Za-z0-9._-]+", "_", a.target) + ".receipt.json")
     with open(out, "w", encoding="utf-8") as fh:

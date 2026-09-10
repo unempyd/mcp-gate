@@ -25,13 +25,13 @@ jobs:
 
       - name: Shipped receipts verify, tampered one does not
         env:
-          MCP_GATE_KEY: mcp-gate-demo-key-not-a-secret
+          X190_KEY: X190-demo-key-not-a-secret
         run: |
           set -euo pipefail
-          python3 mcp_gate.py verify-receipt demo/open-server.receipt.json
-          python3 mcp_gate.py verify-receipt demo/compliant-server.receipt.json
+          python3 X190.py verify-receipt demo/open-server.receipt.json
+          python3 X190.py verify-receipt demo/compliant-server.receipt.json
           set +e
-          python3 mcp_gate.py verify-receipt demo/tampered.receipt.json >/dev/null
+          python3 X190.py verify-receipt demo/tampered.receipt.json >/dev/null
           rc=$?
           set -e
           test "$rc" -eq 1 || { echo "tampered receipt must fail, got rc=$rc" >&2; exit 1; }
@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          python3 mcp_gate.py check ./mcp_gate.py >/dev/null 2>&1
+          python3 X190.py check ./X190.py >/dev/null 2>&1
           rc=$?
           set -e
           test "$rc" -eq 2 || { echo "expected exit 2, got $rc" >&2; exit 1; }

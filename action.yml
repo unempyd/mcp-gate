@@ -1,4 +1,4 @@
-name: 'MCP Gate'
+name: 'X190'
 description: >
   Probe a deployed MCP endpoint and fail the build if it serves its tool list
   without authentication, or refuses without a usable RFC 9728 challenge.
@@ -11,7 +11,7 @@ inputs:
     description: 'http(s) URL of the MCP endpoint to probe'
     required: true
   receipt-out:
-    description: 'Optional receipt output path (default: mcp-gate-receipts/)'
+    description: 'Optional receipt output path (default: X190-receipts/)'
     required: false
   gate-key:
     description: >
@@ -35,7 +35,7 @@ runs:
       # ${{ inputs.* }} into the script body would execute whatever a caller
       # derived them from (PR title, branch name, dispatch input).
       env:
-        MCP_GATE_KEY: ${{ inputs.gate-key }}
+        X190_KEY: ${{ inputs.gate-key }}
         GATE_TARGET: ${{ inputs.target }}
         GATE_RECEIPT_OUT: ${{ inputs.receipt-out }}
       run: |
@@ -43,15 +43,15 @@ runs:
         ARGS=("$GATE_TARGET")
         if [ -n "$GATE_RECEIPT_OUT" ]; then ARGS+=(--receipt-out "$GATE_RECEIPT_OUT"); fi
         set +e
-        python3 "$GITHUB_ACTION_PATH/mcp_gate.py" check "${ARGS[@]}" | tee mcp-gate-result.json
+        python3 "$GITHUB_ACTION_PATH/X190.py" check "${ARGS[@]}" | tee X190-result.json
         GATE_RC=${PIPESTATUS[0]}
         set -e
         if [ "$GATE_RC" -eq 2 ]; then
-          echo "mcp-gate: target error" >&2
+          echo "X190: target error" >&2
           exit 2
         fi
-        FAILURES=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['failures'])")
-        RECEIPT=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['receipt'])")
+        FAILURES=$(python3 -c "import json;print(json.load(open('X190-result.json'))['failures'])")
+        RECEIPT=$(python3 -c "import json;print(json.load(open('X190-result.json'))['receipt'])")
         echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
         echo "receipt=$RECEIPT" >> "$GITHUB_OUTPUT"
         exit "$GATE_RC"
