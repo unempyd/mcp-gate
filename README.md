@@ -11,19 +11,23 @@ Single file, Python 3 stdlib only, zero dependencies.
 
 ## Why only that
 
-We measured the first 100 servers in the official MCP registry on 2026-09-10.
-Of the 74 exposing HTTP endpoints, **40 served their tool list with no token
-at all**. One returned a textbook RFC 9728 challenge on `initialize` and then
-served `tools/list` tokenlessly anyway — advertised, not enforced.
-
-Every fault observed in that population was auth absence (F1) or a broken
+We probed the 74 HTTP endpoints among the first 100 servers in the official MCP
+registry on 2026-09-10. Every fault observed was auth absence (F1) or a broken
 OAuth resource-server posture (F2). Nothing else was observed, so nothing else
-is checked. See [EVIDENCE.md](EVIDENCE.md) for the measurement and for what
-the scope deliberately excludes.
+is checked.
+
+The headline rate from that run is **suspended pending a re-measurement**: the
+probe of the day treated HTTP 200 as proof the tool list was served, and
+JSON-RPC routinely refuses *inside* a 200. v0.4.0 requires a JSON-RPC `result`
+before it will claim anything. What survives unqualified is that 25 endpoints
+refused and published resolvable RFC 9728 metadata, 4 refused with a broken or
+absent challenge, and one advertised OAuth correctly and then served its tools
+without a token anyway. See [EVIDENCE.md](EVIDENCE.md).
 
 ```
-F1  auth-absence         endpoint answers tool calls with no token
-F2  incomplete-oauth-rs  401 without RFC 9728 resource_metadata, or PRM broken
+F1  auth-absence         tools/list returned a JSON-RPC result with no token
+F2  incomplete-oauth-rs  refused, but with no RFC 9728 challenge a client could
+                         follow, or with metadata that does not resolve
 ```
 
 ## Usage
@@ -72,7 +76,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/mcp-gate@v0.3.0
+- uses: unempyd/mcp-gate@v0.4.0
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.MCP_GATE_KEY }}
@@ -89,6 +93,16 @@ python3 -m unittest discover -s tests
 
 Stdlib only, no outbound network: the tests stand up loopback servers.
 
+## What a finding asserts
+
+`AUTH-OPEN` is an observation, not a verdict: at this timestamp, from this
+network position, the endpoint returned a JSON-RPC `result` for `tools/list`
+sent with no credentials, and the receipt says how many tools came back.
+
+It does not assert that this is a mistake. A deliberately public MCP server is
+a legitimate design. The receipt is evidence of what the endpoint did; whether
+that is a fault is the operator's call.
+
 ## What this is NOT
 
 Not a gateway, agent runtime, identity provider, or hosted platform. Not a
@@ -104,11 +118,17 @@ Probes are single-shot and chained (`initialize`, then a tokenless
 position — not full OAuth conformance.
 
 - A `pass` means the endpoint refused an unauthenticated tool call **then**,
-  **from here**, and published resolvable metadata. It is not an audit.
+  **from here**, and published resolvable metadata. It is not an audit, and it
+  says nothing about token validation, scopes, or authorisation once a token is
+  actually presented.
 - Bot walls, dead endpoints and unexpected protocol shapes report
   `inconclusive`. The tool never claims a fault it did not observe.
-- The PRM document is fetched only over http(s), with a size cap. A scanned
-  server does not get to choose what the scanner reads.
+- The PRM document is fetched only over http(s), with a size cap, and never
+  from a private or link-local address that is not the host being probed. A
+  scanned server does not get to choose what the scanner reads. This does not
+  survive DNS rebinding between the check and the fetch.
+- urllib follows a 302 by re-issuing as GET, so a probe can end up describing a
+  different host. Redirects are recorded in the receipt evidence.
 - Receipts are HMAC-signed, not PKI. Anyone holding the key can mint one; they
   are tamper-evidence for an archive, not third-party attestation.
 - Probing sends unauthenticated requests to whatever URL you pass. Only probe
