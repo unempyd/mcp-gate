@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Gate reports faults on its own fixtures
+        run: |
+          set -euo pipefail
+          for fixture in demo/broken.py demo/server.py; do
+            set +e
+            python3 mcp_gate.py check "$fixture" --receipt-out "$RUNNER_TEMP/r.json" >/dev/null
+            rc=$?
+            set -e
+            test "$rc" -eq 1 || { echo "$fixture: expected exit 1, got $rc" >&2; exit 1; }
+          done
+          echo "both fixtures reported faults, as expected"
+
+      - name: Gate refuses a non-Python target
+        run: |
+          set -euo pipefail
+          printf '// oauth bearer\nfunction f() {}\n' > "$RUNNER_TEMP/app.js"
+          set +e
+          python3 mcp_gate.py check "$RUNNER_TEMP/app.js" >/dev/null 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 2 || { echo "expected exit 2, got $rc" >&2; exit 1; }

@@ -13,8 +13,11 @@ inputs:
   receipt-out:
     description: 'Optional receipt output path (default: next to target, or mcp-gate-receipts/ for URLs)'
     required: false
-  min-gate-key:
-    description: 'Optional HMAC key for receipt signing (use a repository secret)'
+  gate-key:
+    description: >
+      HMAC key for receipt signing (use a repository secret). Receipts are only
+      verifiable where the same key is present, so set this explicitly if you
+      intend to verify them later; otherwise each run signs with a throwaway key.
     required: false
 outputs:
   receipt:
@@ -28,13 +31,27 @@ runs:
   steps:
     - id: gate
       shell: bash
+      # Inputs reach the script only as environment variables. Interpolating
+      # ${{ inputs.* }} into the script body would execute whatever a caller
+      # derived them from (PR title, branch name, dispatch input).
       env:
-        MCP_GATE_KEY: ${{ inputs['min-gate-key'] }}
+        MCP_GATE_KEY: ${{ inputs.gate-key }}
+        GATE_TARGET: ${{ inputs.target }}
+        GATE_RECEIPT_OUT: ${{ inputs.receipt-out }}
       run: |
-        ARGS=("${{ inputs.target }}")
-        if [ -n "${{ inputs.receipt-out }}" ]; then ARGS+=(--receipt-out "${{ inputs.receipt-out }}"); fi
+        set -euo pipefail
+        ARGS=("$GATE_TARGET")
+        if [ -n "$GATE_RECEIPT_OUT" ]; then ARGS+=(--receipt-out "$GATE_RECEIPT_OUT"); fi
+        set +e
         python3 "$GITHUB_ACTION_PATH/mcp_gate.py" check "${ARGS[@]}" | tee mcp-gate-result.json
-        FAILURES=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['failures'])")
-        RECEIPT=$(python3 -c "import json;print(json.load(open('mcp-gate-result.json'))['receipt'])")
+        GATE_RC=${PIPESTATUS[0]}
+        set -e
+        if [ "$GATE_RC" -eq 2 ]; then
+          echo "mcp-gate: target error" >&2
+          exit 2
+        fi
+        FAILURES=$(python3 -c "import json,sys;print(json.load(open('mcp-gate-result.json'))['failures'])")
+        RECEIPT=$(python3 -c "import json,sys;print(json.load(open('mcp-gate-result.json'))['receipt'])")
         echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
         echo "receipt=$RECEIPT" >> "$GITHUB_OUTPUT"
+        exit "$GATE_RC"

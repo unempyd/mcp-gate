@@ -1,7 +1,7 @@
 {
- "schema": "mcp-gate/receipt@1",
- "tool_version": "0.1.1",
- "timestamp": "2026-09-10T04:55:55.630007+00:00",
+ "schema": "mcp-gate/receipt@2",
+ "tool_version": "0.2.0",
+ "timestamp": "2026-09-10T07:20:24.244068+00:00",
  "target": "demo/broken.py",
  "mode": "source",
  "checks": [
@@ -37,6 +37,7 @@
   }
  ],
  "fixes": [],
- "artifact_sha256": "fc51290b872d09320fc1341b5ac8bd46c73da97c223b8a5841a269ca336f83cc",
- "hmac_sha256": "a12b917127f8e943530e459c4999cac481687acc0e3c9d7e673557043b9bbe42"
+ "target_sha256": "8b71fb303ba79b4cf99739a88ef9131f5b4ce41528a93e4de1b23b7edff285c2",
+ "receipt_sha256": "607c5b75e899e2c398249b7bc971cb448f4ee362af8a5283e3958893596db272",
+ "hmac_sha256": "2da78e6e7fe2674737383b37b6314ce984129f1bb69851eeddfc0dfe64e21ad8"
 }
