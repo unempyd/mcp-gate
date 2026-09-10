@@ -321,11 +321,22 @@ class NeverClaimUnobservedFaults(ServerCase):
         class H(Base):
             def do_POST(self):
                 self.read_method()
-                self.reply(403, b"<html>error 1010 cloudflare access denied</html>")
+                self.reply(403, b"<html>error 1010 cloudflare access denied</html>",
+                           content_type="text/html")
 
         findings, _ = self.probe(H)
         self.assertIn("PROBE-BLOCKED", ids(findings))
         self.assertEqual(statuses(findings), {"inconclusive"})
+
+    def test_a_json_403_cannot_buy_an_inconclusive(self):
+        """Putting WAF words in a JSON body was a free skip past the F2 branch."""
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(403, b'{"note":"access denied"}')
+
+        findings, _ = self.probe(H)
+        self.assertNotIn("PROBE-BLOCKED", ids(findings))
 
     def test_unexpected_status_is_inconclusive(self):
         class H(Base):
@@ -342,33 +353,55 @@ class NeverClaimUnobservedFaults(ServerCase):
 
 
 class EvidenceIntegrity(ServerCase):
-    def test_followed_redirect_is_recorded(self):
-        """urllib follows 302 by re-issuing as GET, so a finding can end up
-        describing a different host than the target. Say so in the receipt."""
-        class Final(Base):
+    def test_cross_origin_redirect_is_refused_not_followed(self):
+        """A finding is a claim about the URL the caller named. Being handed to
+        another origin means we cannot make that claim — and following it read a
+        tool list off a different machine while the receipt named the target."""
+        class Internal(Base):
             def do_GET(self):
-                self.reply(200, TOOLS_RESULT)
+                self.reply(200, b'{"jsonrpc":"2.0","id":2,"result":'
+                                b'{"tools":[{"name":"INTERNAL_SECRET_TOOL"}]}}')
 
             def do_POST(self):
                 self.read_method()
-                self.reply(200, TOOLS_RESULT)
+                self.do_GET()
 
-        final = http.server.HTTPServer(("127.0.0.1", 0), Final)
-        threading.Thread(target=final.serve_forever, daemon=True).start()
-        self.addCleanup(final.shutdown)
-        fport = final.server_address[1]
+        internal = http.server.HTTPServer(("127.0.0.1", 0), Internal)
+        threading.Thread(target=internal.serve_forever, daemon=True).start()
+        self.addCleanup(internal.shutdown)
+        iport = internal.server_address[1]
 
         class Redirector(Base):
             def do_POST(self):
                 self.read_method()
                 self.send_response(302)
-                self.send_header("Location", f"http://127.0.0.1:{fport}/mcp")
+                self.send_header("Location", f"http://127.0.0.1:{iport}/mcp")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
-        _, evidence = self.probe(Redirector)
-        self.assertTrue(any("redirected to" in e for e in evidence),
-                        f"redirect not recorded: {evidence}")
+        findings, _ = self.probe(Redirector)
+        self.assertIn("REDIRECT-OFF-TARGET", ids(findings))
+        self.assertEqual(statuses(findings), {"inconclusive"})
+        self.assertNotIn("INTERNAL_SECRET_TOOL", json.dumps(findings))
+
+    def test_same_origin_redirect_is_followed_and_recorded(self):
+        class H(Base):
+            def do_POST(self):
+                if self.path != "/v2/mcp":
+                    self.send_response(302)
+                    self.send_header("Location", "/v2/mcp")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.read_method()
+                self.reply(200, TOOLS_RESULT)
+
+            def do_GET(self):
+                self.reply(200, TOOLS_RESULT)
+
+        findings, evidence = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+        self.assertTrue(any("same origin" in e for e in evidence), evidence)
 
     def test_unfollowed_307_is_not_read_as_a_posture(self):
         """urllib does not follow 307 on POST; the status must not be interpreted."""
@@ -459,6 +492,95 @@ class EvasionResistance(ServerCase):
         self.addCleanup(redir.shutdown)
         with self.assertRaises(gate.BlockedRedirect):
             gate.fetch_prm(f"http://127.0.0.1:{redir.server_address[1]}/prm", "victim.example", 5)
+
+
+class ReviewFindings(ServerCase):
+    """Each reproduced against v0.5.0 by an outside reviewer."""
+
+    def test_truncation_is_measured_in_bytes_read_not_reencoded_chars(self):
+        """Decoding with errors="replace" turns each bad byte into a 3-byte U+FFFD,
+        so re-encoding a decoded string could report a body under the cap as over it."""
+        payload = b"\xff" * (2 * 1024 * 1024)   # 2 MB raw, ~6 MB if re-encoded
+
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, payload, content_type="application/octet-stream")
+
+        findings, evidence = self.probe(H)
+        self.assertNotIn("RESPONSE-TRUNCATED", ids(findings))
+        self.assertFalse(any("read cap" in e for e in evidence), evidence)
+
+    def test_handshake_is_completed_before_asking_for_tools(self):
+        seen = {"methods": [], "proto_header": None}
+
+        class H(Base):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                seen["methods"].append(body.get("method"))
+                if body.get("method") == "tools/list":
+                    seen["proto_header"] = self.headers.get("MCP-Protocol-Version")
+                    self.reply(200, TOOLS_RESULT)
+                elif body.get("method") == "initialize":
+                    self.reply(200, b'{"jsonrpc":"2.0","id":1,"result":'
+                                    b'{"protocolVersion":"2026-07-28"}}')
+                else:
+                    self.reply(202, b"")
+
+        self.probe(H)
+        self.assertIn("notifications/initialized", seen["methods"])
+        self.assertLess(seen["methods"].index("notifications/initialized"),
+                        seen["methods"].index("tools/list"))
+        self.assertEqual(seen["proto_header"], "2026-07-28")
+
+    def test_negotiated_protocol_version_is_echoed_back(self):
+        seen = {}
+
+        class H(Base):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                if body.get("method") == "initialize":
+                    self.reply(200, b'{"jsonrpc":"2.0","id":1,"result":'
+                                    b'{"protocolVersion":"2025-06-18"}}')
+                elif body.get("method") == "tools/list":
+                    seen["hdr"] = self.headers.get("MCP-Protocol-Version")
+                    self.reply(200, TOOLS_RESULT)
+                else:
+                    self.reply(202, b"")
+
+        findings, evidence = self.probe(H)
+        self.assertEqual(seen.get("hdr"), "2025-06-18")
+        self.assertTrue(any("negotiated protocolVersion 2025-06-18" in e for e in evidence))
+
+    def test_signing_key_survives_a_concurrent_first_run(self):
+        """O_EXCL with no FileExistsError handler raised on the losing process."""
+        home = tempfile.mkdtemp()
+        real_home, had = os.environ.get("HOME"), os.environ.pop("MCP_GATE_KEY", None)
+        os.environ["HOME"] = home
+        try:
+            kf = os.path.join(home, ".mcp-gate-key")
+            real_open = os.open
+
+            def racing_open(path, flags, mode=0o777, **kw):
+                # Another process creates the file between the exists() check and ours.
+                if path == kf and flags & os.O_EXCL:
+                    with open(kf, "w") as fh:
+                        fh.write("a" * 64)
+                return real_open(path, flags, mode, **kw)
+
+            os.open = racing_open
+            try:
+                key = gate._signing_key()
+            finally:
+                os.open = real_open
+            self.assertEqual(key, "a" * 64)
+        finally:
+            if real_home is not None:
+                os.environ["HOME"] = real_home
+            if had is not None:
+                os.environ["MCP_GATE_KEY"] = had
 
 
 class DemoKeyIsNotTrustMaterial(unittest.TestCase):

@@ -89,7 +89,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/mcp-gate@v0.5.0
+- uses: unempyd/mcp-gate@v0.6.0
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.MCP_GATE_KEY }}
@@ -135,13 +135,23 @@ position — not full OAuth conformance.
   says nothing about token validation, scopes, or authorisation once a token is
   actually presented.
 - Bot walls, dead endpoints and unexpected protocol shapes report
-  `inconclusive`. The tool never claims a fault it did not observe.
-- The PRM document is fetched only over http(s), with a size cap, and never
-  from a private or link-local address that is not the host being probed. A
-  scanned server does not get to choose what the scanner reads. This does not
-  survive DNS rebinding between the check and the fetch.
-- urllib follows a 302 by re-issuing as GET, so a probe can end up describing a
-  different host. Redirects are recorded in the receipt evidence.
+  `inconclusive`. The tool never claims a fault it did not observe. A bot wall
+  must look like one: a 403 carrying a JSON body no longer counts, so an MCP
+  server cannot buy an inconclusive by putting "access denied" in its JSON.
+- The handshake is completed before anything is asked for — `initialize`, then
+  `notifications/initialized`, then `tools/list` carrying the protocol version
+  the server negotiated. A spec-strict server that would otherwise reject the
+  request is measured rather than filed as inconclusive.
+- Every request this tool makes — the probe itself and the metadata fetch —
+  goes through one guarded opener that re-validates each redirect hop. Neither
+  will follow a redirect to a private or link-local address, so a scanned server
+  cannot use this tool to reach into the network of whoever runs it. This does
+  not survive DNS rebinding between the check and the connection.
+- The probe additionally refuses to leave the origin you named. A finding is a
+  claim about a specific endpoint, so a redirect to a different host or port
+  reports `REDIRECT-OFF-TARGET` / inconclusive rather than quietly measuring
+  something else and filing it under your target. Same-origin redirects are
+  followed and recorded.
 - Receipts are HMAC-signed, not PKI. Anyone holding the key can mint one; they
   are tamper-evidence for an archive, not third-party attestation.
 - **A receipt has no freshness.** It carries a timestamp and nothing binds it to

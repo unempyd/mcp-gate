@@ -3,8 +3,8 @@
 
 One question, measured one way: send `initialize`, then replay `tools/list`
 with no token, and read the reply. The finding requires positive proof — a
-JSON-RPC `result` came back — because JSON-RPC refuses inside a 200 response
-as often as it refuses with a 401. HTTP status alone proves nothing.
+JSON-RPC `result` echoing the request id — because JSON-RPC refuses inside a
+200 response as often as it refuses with a 401. HTTP status alone proves nothing.
 
 Fault classes (only what has been observed in a real population):
   F1 auth-absence        endpoint returned a tools/list result with no token
@@ -22,8 +22,9 @@ import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DEMO_KEY = "mcp-gate-demo-key-not-a-secret"
+PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {
     "F1": "auth-absence (tools/list returned a result with no token)",
     "F2": "incomplete-oauth-rs (no followable RFC 9728 challenge, or PRM broken)",
@@ -83,18 +84,18 @@ def answer_for(objs, want_id):
             return o
     return objs[0] if objs else None
 
-def _host_is_reachable_pivot(prm_host, probe_host):
-    """True when fetching prm_host would reach somewhere the probed server should
-    not be able to send us: a private, loopback or link-local address that is not
-    simply the host we are already probing.
+def _host_is_reachable_pivot(other_host, probe_host):
+    """True when fetching other_host would reach somewhere the probed server
+    should not be able to send us: a private, loopback or link-local address
+    that is not simply the host we are already probing.
 
     This does not survive DNS rebinding between check and fetch; it stops the
     ordinary case of an endpoint pointing us at cloud metadata or an internal host.
     """
-    if prm_host and probe_host and prm_host.lower() == probe_host.lower():
+    if other_host and probe_host and other_host.lower() == probe_host.lower():
         return False
     try:
-        infos = socket.getaddrinfo(prm_host, None)
+        infos = socket.getaddrinfo(other_host, None)
     except Exception:
         return False  # unresolvable: the fetch will fail on its own merits
     for info in infos:
@@ -108,78 +109,128 @@ def _host_is_reachable_pivot(prm_host, probe_host):
     return False
 
 class BlockedRedirect(Exception):
-    """A redirect hop pointed somewhere the scanned server should not send us."""
+    """A redirect hop pointed somewhere we will not follow."""
 
 class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """The scanned server controls every hop, not just the first one."""
+    """The scanned server controls every hop, not just the first one.
 
-    def __init__(self, probe_host):
+    `probe_origin` is set for the probe itself: a finding is a claim about the
+    URL the caller named, so being handed to a different origin — a different
+    host *or port* — means we can no longer make that claim and must say so
+    instead of silently re-targeting.
+    """
+
+    def __init__(self, probe_host, probe_origin=None):
         self.probe_host = probe_host
+        self.probe_origin = probe_origin
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parts = urllib.parse.urlsplit(newurl)
         if parts.scheme.lower() not in ("http", "https"):
-            raise BlockedRedirect(f"redirect to non-http(s) URL: {newurl[:120]!r}")
+            raise BlockedRedirect(f"redirect to a non-http(s) URL: {newurl[:120]!r}")
         if _host_is_reachable_pivot(parts.hostname, self.probe_host):
             raise BlockedRedirect(f"redirect to a private or link-local address: {newurl[:120]!r}")
+        if self.probe_origin and parts.netloc.lower() != self.probe_origin.lower():
+            raise BlockedRedirect(f"redirect to a different origin: {newurl[:120]!r}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
+def guarded_opener(probe_host, probe_origin=None):
+    return urllib.request.build_opener(_GuardedRedirectHandler(probe_host, probe_origin))
+
 def fetch_prm(prm_url, probe_host, timeout):
-    """Fetch protected-resource metadata, re-validating each redirect hop."""
-    opener = urllib.request.build_opener(_GuardedRedirectHandler(probe_host))
+    """Fetch protected-resource metadata, re-validating each redirect hop.
+
+    Cross-host is allowed here: RFC 9728 metadata may legitimately be served
+    somewhere other than the resource. Private targets are not.
+    """
     req = urllib.request.Request(prm_url, headers={"User-Agent": f"mcp-gate/{VERSION}"})
-    with opener.open(req, timeout=timeout) as r:
+    with guarded_opener(probe_host).open(req, timeout=timeout) as r:
         return json.loads(r.read(PRM_MAX_BYTES).decode("utf-8", "replace"))
 
 # ---------------- runtime probe (single-shot, unauthenticated) ----------------
 def probe_http(url, timeout=10):
     """One initialize, one tokenless tools/list replay, then the PRM checks."""
     findings, evidence = [], []
+    _parts = urllib.parse.urlsplit(url)
+    probe_host = _parts.hostname
+    opener = guarded_opener(probe_host, probe_origin=_parts.netloc)
 
     def post(body, extra=None):
+        """Returns (status, headers, text, final_url, truncated). Raises BlockedRedirect."""
         req = urllib.request.Request(url, data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json",
                      "Accept": "application/json, text/event-stream",
                      "User-Agent": f"mcp-gate/{VERSION} (correctness probe)", **(extra or {})})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return (r.status, dict(r.headers),
-                        r.read(BODY_SNIPPET).decode("utf-8", "replace"), r.url)
+            with opener.open(req, timeout=timeout) as r:
+                raw = r.read(BODY_SNIPPET + 1)
+                return (r.status, dict(r.headers), raw[:BODY_SNIPPET].decode("utf-8", "replace"),
+                        r.url, len(raw) > BODY_SNIPPET)
+        except BlockedRedirect:
+            raise
         except urllib.error.HTTPError as e:
-            return (e.code, dict(e.headers),
-                    (e.read(BODY_SNIPPET) or b"").decode("utf-8", "replace"), e.url)
+            raw = e.read(BODY_SNIPPET + 1) or b""
+            return (e.code, dict(e.headers), raw[:BODY_SNIPPET].decode("utf-8", "replace"),
+                    e.url, len(raw) > BODY_SNIPPET)
         except Exception as e:
-            return None, {}, str(e), url
+            return None, {}, str(e), url, False
+
+    def off_target(e):
+        return [{"id": "REDIRECT-OFF-TARGET", "class": "F1", "status": "inconclusive",
+                 "evidence": f"{e} — no posture claimed for {url}; re-run against that URL "
+                             f"directly if you intended to probe it"}], evidence
 
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2026-07-28", "capabilities": {},
+            "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
                        "clientInfo": {"name": "mcp-gate", "version": VERSION}}}
-    s1, h1, b1, u1 = post(init)
+    try:
+        s1, h1, b1, u1, _ = post(init)
+    except BlockedRedirect as e:
+        return off_target(e)
     evidence.append(f"POST initialize -> {s1}")
     if s1 is None:
         return [{"id": "NET", "class": "F1", "status": "inconclusive",
                  "evidence": f"unreachable: {b1} — no posture observable, no fault claimed"}], evidence
     if u1 and u1 != url:
-        # The result describes wherever we ended up, so say so in the receipt.
-        evidence.append(f"redirected to {u1}")
+        evidence.append(f"redirected within the same origin to {u1}")
 
-    low = b1.lower()
-    if s1 in (403, 429, 503) and ("cloudflare" in low or "error 1010" in low or "access denied" in low
-                                  or "captcha" in low or "rate limit" in low) and "jsonrpc" not in low:
-        # WAF / bot wall, not an MCP auth response — never claim a fault we did not observe.
+    low, ctype1 = b1.lower(), (hget(h1, "Content-Type") or "").lower()
+    if (s1 in (403, 429, 503) and "json" not in ctype1 and "jsonrpc" not in low
+            and ("cloudflare" in low or "error 1010" in low or "access denied" in low
+                 or "captcha" in low or "rate limit" in low)):
+        # A non-JSON bot wall, not an MCP auth response. Requiring a non-JSON body
+        # stops an MCP server buying an inconclusive by putting these words in JSON.
         return [{"id": "PROBE-BLOCKED", "class": "F1", "status": "inconclusive",
                  "evidence": f"endpoint returned {s1} from bot protection; auth posture untestable from here"}], evidence
 
+    # Complete the handshake before asking for anything: a spec-strict server is
+    # entitled to reject tools/list otherwise, which would read as inconclusive
+    # and quietly under-test a server that may well be open.
+    negotiated = PROTOCOL_VERSION
+    init_rpc = answer_for(collect_jsonrpc(b1, ctype1), 1)
+    if init_rpc and isinstance(init_rpc.get("result"), dict):
+        negotiated = str(init_rpc["result"].get("protocolVersion") or PROTOCOL_VERSION)
+        evidence.append(f"server negotiated protocolVersion {negotiated}")
+
+    followup = {"MCP-Protocol-Version": negotiated}
     sess = hget(h1, "Mcp-Session-Id")
     if sess:
         evidence.append("session header issued (Mcp-Session-Id present)")
-    s2, h2, b2, u2 = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-                          {"Mcp-Session-Id": sess} if sess else None)
-    evidence.append(f"tokenless tools/list -> {s2}")
+        followup["Mcp-Session-Id"] = sess
+    if s1 == 200:
+        try:
+            post({"jsonrpc": "2.0", "method": "notifications/initialized"}, followup)
+        except BlockedRedirect:
+            pass  # best effort; the tools/list call below is the measurement
 
-    truncated = len(b2.encode("utf-8", "replace")) >= BODY_SNIPPET
+    try:
+        s2, h2, b2, u2, truncated = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, followup)
+    except BlockedRedirect as e:
+        return off_target(e)
+    evidence.append(f"tokenless tools/list -> {s2}")
     if truncated:
         evidence.append(f"response body hit the {BODY_SNIPPET}-byte read cap and was truncated")
+
     rpc = answer_for(collect_jsonrpc(b2, hget(h2, "Content-Type")), 2)
     if s2 == 200 and rpc is not None and "result" in rpc:
         # Positive proof: the call succeeded without a token.
@@ -224,16 +275,14 @@ def probe_http(url, timeout=10):
                              "evidence": f"{s2} without RFC 9728 resource_metadata (got: {wa[:120] or 'no WWW-Authenticate'})"})
         else:
             prm_url = m.group(1)
-            scheme = urllib.parse.urlsplit(prm_url).scheme.lower()
-            prm_host = urllib.parse.urlsplit(prm_url).hostname
-            probe_host = urllib.parse.urlsplit(url).hostname
+            parts = urllib.parse.urlsplit(prm_url)
             # The scanned server chooses this URL. urllib speaks file:// and ftp://,
             # and a public endpoint pointing at 169.254.169.254 would make this tool
             # an SSRF pivot for whoever runs it.
-            if scheme not in ("http", "https"):
+            if parts.scheme.lower() not in ("http", "https"):
                 findings.append({"id": "PRM-BAD-SCHEME", "class": "F2", "status": "fail",
                                  "evidence": f"resource_metadata is not an http(s) URL, refused unfetched: {prm_url[:120]!r}"})
-            elif _host_is_reachable_pivot(prm_host, probe_host):
+            elif _host_is_reachable_pivot(parts.hostname, probe_host):
                 findings.append({"id": "PRM-PRIVATE-TARGET", "class": "F2", "status": "fail",
                                  "evidence": f"resource_metadata points at a private or link-local address, "
                                              f"refused unfetched: {prm_url[:120]!r}"})
@@ -266,10 +315,14 @@ def _signing_key():
         return key.strip()
     kf = os.path.expanduser("~/.mcp-gate-key")
     if not os.path.exists(kf):
-        # 0600 at creation: no window in which the secret is world-readable.
-        fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            fh.write(os.urandom(32).hex())
+        try:
+            # 0600 at creation: no window in which the secret is world-readable.
+            fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass  # a concurrent first run won the race; read what it wrote
+        else:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(os.urandom(32).hex())
     with open(kf, encoding="utf-8") as fh:
         return fh.read().strip()
 
@@ -278,14 +331,10 @@ def _canon(body):
 
 def receipt(target, checks, evidence):
     key = _signing_key()
-    if key == DEMO_KEY:
-        # This constant is published in the README so anyone can verify the demo
-        # fixtures. Signing with it would let anyone mint a receipt this verifier
-        # accepts, so receipts made with it are marked and never look authentic.
-        demo = True
-    else:
-        demo = False
-    body = {"schema": "mcp-gate/receipt@5", "tool_version": VERSION, "demo_key": demo,
+    # DEMO_KEY is published in the README so anyone can verify the demo fixtures.
+    # Signing with it would let anyone mint a receipt this verifier accepts, so
+    # receipts made with it are marked and never look authentic.
+    body = {"schema": "mcp-gate/receipt@5", "tool_version": VERSION, "demo_key": key == DEMO_KEY,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "target": target, "mode": "runtime",
             "checks": checks, "probe_evidence": evidence}
