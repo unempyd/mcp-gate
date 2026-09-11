@@ -25,7 +25,7 @@ import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys, tempfile
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 DEMO_KEY = "X190-demo-key-not-a-secret"
 PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {

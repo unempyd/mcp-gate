@@ -33,12 +33,18 @@ F2  incomplete-oauth-rs  refused, but with no RFC 9728 challenge a client could
 ## Install
 
 ```bash
-pip install git+https://github.com/unempyd/X190@v0.8.0
+uvx x190 check https://host/mcp
 ```
 
-That gives you an `X190` command. No dependencies, so it works in any Python
-3.9+ environment. If you would rather not install anything, the tool is one
-file: download `X190.py` from the [latest
+That runs it without installing anything. To keep it around:
+
+```bash
+pip install x190
+```
+
+Either way you get an `X190` command. No dependencies, so it works in any
+Python 3.9+ environment. If you would rather not use a package manager at all,
+the tool is one file: download `X190.py` from the [latest
 release](https://github.com/unempyd/X190/releases/latest) and run it with
 `python3 X190.py`.
 
@@ -101,7 +107,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/X190@v0.8.0
+- uses: unempyd/X190@v0.8.1
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.X190_KEY }}
