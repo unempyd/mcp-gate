@@ -44,3 +44,57 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 2 || { echo "expected exit 2, got $rc" >&2; exit 1; }
+
+  action:
+    name: the composite action gates in both directions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Start an open endpoint and a correctly refusing one
+        run: |
+          set -euo pipefail
+          python3 .github/fixtures/endpoints.py open 8801 &
+          python3 .github/fixtures/endpoints.py refuse 8802 &
+          for port in 8801 8802; do
+            for _ in $(seq 1 40); do
+              python3 -c "import socket,sys; sys.exit(0 if socket.socket().connect_ex(('127.0.0.1',$port))==0 else 1)" && break
+              sleep 0.25
+            done
+          done
+
+      # The action is the product surface on the Marketplace. If it stops
+      # failing an open endpoint, the listing ships a gate that gates nothing.
+      - name: An open endpoint must fail the build
+        id: open
+        continue-on-error: true
+        uses: ./
+        with:
+          target: http://127.0.0.1:8801/mcp
+          gate-key: ci-action-fixture-key
+
+      - name: ...and that failure must be what the step reported
+        run: |
+          set -euo pipefail
+          test "${{ steps.open.outcome }}" = "failure" \
+            || { echo "open endpoint did not fail the build" >&2; exit 1; }
+          test "${{ steps.open.outputs.failures }}" -ge 1 \
+            || { echo "no failures reported for an open endpoint" >&2; exit 1; }
+          test -f "${{ steps.open.outputs.receipt }}" \
+            || { echo "receipt path reported but not written" >&2; exit 1; }
+
+      - name: A correctly refusing endpoint must pass
+        id: refuse
+        uses: ./
+        with:
+          target: http://127.0.0.1:8802/mcp
+          gate-key: ci-action-fixture-key
+
+      - name: ...with zero failures
+        run: |
+          set -euo pipefail
+          test "${{ steps.refuse.outputs.failures }}" -eq 0 \
+            || { echo "a refusing endpoint must report zero failures" >&2; exit 1; }

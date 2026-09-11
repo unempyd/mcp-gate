@@ -1,8 +1,8 @@
-name: 'X190'
-description: >
-  Probe a deployed MCP endpoint and fail the build if it serves its tool list
-  without authentication, or refuses without a usable RFC 9728 challenge.
-  Emits a signed receipt of exactly what was observed.
+name: 'X190 MCP Auth Probe'
+# Marketplace rules, both enforced at publish time: the name must be unique
+# across actions, users and organisations, and the description must be under
+# 125 characters. The long-form explanation lives in the README.
+description: 'Fail the build when an MCP endpoint serves its tool list without a token, or refuses with no usable RFC 9728 challenge.'
 branding:
   icon: 'shield'
   color: 'blue'

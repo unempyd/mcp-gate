@@ -107,7 +107,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/X190@v0.8.1
+- uses: unempyd/X190@v0.9.1
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.X190_KEY }}
