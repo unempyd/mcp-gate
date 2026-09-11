@@ -58,8 +58,10 @@ It has been done. A fresh sample was drawn from the registry and probed once
 each with the corrected probe.
 
 ```
-Registry population at 2026-09-11: 5,897 active servers,
-4,942 of them exposing a remote HTTP endpoint, across 1,335 publisher domains.
+Registry population at 2026-09-11: 5,897 active servers. 4,941 entries list a
+remote HTTP endpoint, but those resolve to 2,102 DISTINCT endpoint URLs across
+1,333 publisher domains — the registry allows the same endpoint to be listed
+many times, and the largest publisher accounts for 764 listings of 3 URLs.
 
 Sample: 100 endpoints, at most one per publisher domain.
 
@@ -81,10 +83,19 @@ figure stays suspended and is not restated: the receipts behind it recorded no
 bodies, so it cannot be recovered. That the two rates land near each other is
 not evidence either way, and should not be reported as agreement.
 
+**Correction, 2026-09-11.** This section first reported 4,942 endpoints. That
+was a count of registry *listings*, not endpoints: the registry permits the same
+URL to be listed repeatedly, and 4,941 listings resolve to 2,102 distinct URLs.
+One publisher accounts for 764 listings of 3 URLs; another for 204 listings of 1.
+The rate itself is unaffected, because the sample drew at most one endpoint per
+publisher domain and probed 100 distinct URLs. The population figure around it
+was wrong and is corrected above. The largest genuine fleet is 213 distinct
+endpoints, not 763.
+
 **Sampling limits, which are real:**
 
 - One endpoint per publisher domain. That deliberately stops a single operator
-  with 763 listed servers from setting the rate, but it also means the sample
+  with 213 distinct endpoints from setting the rate, but it also means the sample
   over-weights small publishers relative to the endpoint population. A rate
   weighted by endpoints rather than by publisher would be a different number,
   and we have not measured it.

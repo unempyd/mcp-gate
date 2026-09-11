@@ -36,9 +36,9 @@ registry at most one per publisher domain, probed once each with v0.9.1:
 
 **45% of the sample handed its tool list to an unauthenticated caller.** That
 is a new measurement, not a recovery of the old one, and the sampling limits
-are real — one endpoint per publisher deliberately stops one operator with 763
-listed servers from setting the rate, but it over-weights small publishers as a
-result. Whether a given open endpoint is a fault or an intentionally public
+are real — one endpoint per publisher deliberately stops one operator with 213
+distinct endpoints from setting the rate, but it over-weights small publishers
+as a result. Whether a given open endpoint is a fault or an intentionally public
 service is not a judgement this tool makes. See [EVIDENCE.md](EVIDENCE.md).
 
 ```
