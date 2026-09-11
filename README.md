@@ -1,5 +1,9 @@
 # X190
 
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-X190%20MCP%20Auth%20Probe-2088FF?logo=github)](https://github.com/marketplace/actions/x190-mcp-auth-probe)
+[![PyPI](https://img.shields.io/pypi/v/x190?color=2088FF)](https://pypi.org/project/x190/)
+[![tests](https://github.com/unempyd/X190/actions/workflows/ci.yml/badge.svg)](https://github.com/unempyd/X190/actions/workflows/ci.yml)
+
 Does this MCP endpoint enforce authentication?
 
 That is the whole tool. It sends `initialize`, replays `tools/list` with no
@@ -105,6 +109,8 @@ X190_KEY=X190-demo-key-not-a-secret python3 X190.py verify-receipt demo/tampered
 That key is a demo constant, not a secret.
 
 ## GitHub Action
+
+On the [GitHub Marketplace](https://github.com/marketplace/actions/x190-mcp-auth-probe).
 
 ```yaml
 - uses: unempyd/X190@v0.9.1
@@ -222,3 +228,15 @@ position — not full OAuth conformance.
   than as safe. Read the findings, not just the exit code.
 - Probing sends unauthenticated requests to whatever URL you pass. Only probe
   endpoints you are authorised to probe.
+
+## Hands-on work
+
+The tool is free and the MIT licence already grants every right you need; there
+is no second licence to buy. What is not free is the judgement the probe refuses
+to make — whether a token is actually validated, whether scopes are enforced,
+what to change to make a broken RFC 9728 challenge followable — and continuity,
+because a receipt has no freshness and posture decays. Both are priced at
+[unempyd.github.io/X190-site](https://unempyd.github.io/X190-site/).
+
+A receipt is HMAC, therefore symmetric. It is tamper evidence for your own
+archive and is not sold, or sellable, as third-party attestation.
