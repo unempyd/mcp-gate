@@ -126,7 +126,7 @@ That key is a demo constant, not a secret.
 On the [GitHub Marketplace](https://github.com/marketplace/actions/x190-mcp-auth-probe).
 
 ```yaml
-- uses: unempyd/X190@v0.9.1
+- uses: unempyd/X190@v0.9.2
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.X190_KEY }}
@@ -134,6 +134,13 @@ On the [GitHub Marketplace](https://github.com/marketplace/actions/x190-mcp-auth
 
 The step fails the build when a fault is found. Read
 `steps.<id>.outputs.failures` to gate on the count yourself instead.
+
+## After a finding
+
+On an interactive terminal, a run that finds something prints one short note to
+**stderr** saying what the probe does not claim. `stdout` stays pure JSON, so
+piping it into a parser is unaffected, and nothing is printed in CI or when the
+output is redirected. `--quiet` turns it off entirely.
 
 ## Tests
 

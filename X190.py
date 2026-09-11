@@ -25,8 +25,9 @@ import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys, tempfile, 
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 DEMO_KEY = "X190-demo-key-not-a-secret"
+SITE = "https://unempyd.github.io/X190-site/"
 PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {
     "F1": "auth-absence (tools/list returned a result with no token)",
@@ -495,6 +496,8 @@ def main():
     c.add_argument("target", help="http(s) URL of the MCP endpoint")
     c.add_argument("--receipt-out", default=None)
     c.add_argument("--timeout", type=float, default=10)
+    c.add_argument("--quiet", action="store_true",
+                   help="suppress the stderr note shown after a finding")
     v = sub.add_parser("verify-receipt", help="check a receipt's signature")
     v.add_argument("receipt")
     a = p.parse_args()
@@ -546,6 +549,16 @@ def main():
     fails = [x for x in checks if x["status"] == "fail"]
     print(json.dumps({"target": a.target, "failures": len(fails), "checks": checks,
                       "receipt": out, "fault_classes": sorted({x["class"] for x in fails})}, indent=1))
+
+    # stderr, never stdout: stdout is the machine-readable answer and piping it
+    # into a parser must keep working. Only on a finding, because a passing run
+    # has not earned your attention.
+    if fails and not a.quiet and sys.stderr.isatty():
+        print(f"\n{len(fails)} finding(s). This probe reports what it observed and stops there.\n"
+              f"It cannot tell you whether a token is actually validated rather than merely\n"
+              f"required, whether scopes are enforced per tool, or whether an open endpoint is\n"
+              f"open on purpose. Those are judgements, not observations.\n"
+              f"  {SITE}\n", file=sys.stderr)
     return 1 if fails else 0
 
 if __name__ == "__main__":

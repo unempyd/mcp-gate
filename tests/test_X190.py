@@ -972,6 +972,62 @@ class Cli(unittest.TestCase):
         self.tmp = self._tmp.name
         self.addCleanup(self._tmp.cleanup)
 
+    def test_stdout_stays_pure_json_when_a_finding_is_reported(self):
+        """stdout is the machine-readable answer.
+
+        The note shown after a finding must never reach it: a caller piping
+        this into a parser would break, and breaking someone's pipeline to
+        advertise at them would be worse than saying nothing.
+        """
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, TOOLS_RESULT)
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        out = os.path.join(self.tmp, "pure.json")
+        proc = run_cli("check", f"http://127.0.0.1:{srv.server_address[1]}/mcp",
+                       "--receipt-out", out)
+        self.assertEqual(proc.returncode, 1)
+        parsed = json.loads(proc.stdout)          # raises if anything else leaked in
+        self.assertEqual(parsed["failures"], 1)
+        self.assertNotIn("unempyd.github.io", proc.stdout)
+
+    def test_quiet_is_accepted_and_changes_nothing_on_stdout(self):
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, TOOLS_RESULT)
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        out = os.path.join(self.tmp, "quiet.json")
+        proc = run_cli("check", f"http://127.0.0.1:{srv.server_address[1]}/mcp",
+                       "--receipt-out", out, "--quiet")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(json.loads(proc.stdout)["failures"], 1)
+        self.assertNotIn("unempyd.github.io", proc.stderr)
+
+    def test_a_passing_endpoint_says_nothing_extra(self):
+        """A clean run has not earned the reader's attention."""
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, b'{"jsonrpc":"2.0","id":2,"error":{"code":-32001,"message":"no"}}',
+                           [("WWW-Authenticate", 'Bearer realm="mcp"')])
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        out = os.path.join(self.tmp, "pass.json")
+        proc = run_cli("check", f"http://127.0.0.1:{srv.server_address[1]}/mcp",
+                       "--receipt-out", out)
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("unempyd.github.io", proc.stdout + proc.stderr)
+
     def test_open_endpoint_exits_one(self):
         class H(Base):
             def do_POST(self):
