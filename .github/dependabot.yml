@@ -1,0 +1,11 @@
+# The workflows pin actions to commit SHAs, which is the safe way to depend on
+# someone else's code but goes stale silently. This opens a PR when a pinned
+# action moves, so the pins stay current without anyone remembering to look.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
