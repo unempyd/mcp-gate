@@ -20,13 +20,26 @@ registry on 2026-09-10. Every fault observed was auth absence (F1) or a broken
 OAuth resource-server posture (F2). Nothing else was observed, so nothing else
 is checked.
 
-The headline rate from that run is **suspended pending a re-measurement**: the
-probe of the day treated HTTP 200 as proof the tool list was served, and
-JSON-RPC routinely refuses *inside* a 200. The probe now requires a JSON-RPC
-`result` echoing the request id before it will claim anything. What survives unqualified is that 25 endpoints
-refused and published resolvable RFC 9728 metadata, 4 refused with a broken or
-absent challenge, and one advertised OAuth correctly and then served its tools
-without a token anyway. See [EVIDENCE.md](EVIDENCE.md).
+That run's headline rate stays **suspended** — the probe of the day treated
+HTTP 200 as proof the tool list was served, and JSON-RPC routinely refuses
+*inside* a 200. Its receipts recorded no bodies, so it cannot be recovered.
+
+It has been re-measured instead. On 2026-09-11, 100 endpoints drawn from the
+registry at most one per publisher domain, probed once each with v0.9.1:
+
+```
+ 94  conclusive,  6 inconclusive
+ 45  served the tool list with no token          45.0%
+ 40  refused with RFC 9728 metadata that resolved
+  9  refused with a broken, absent or unfetchable challenge
+```
+
+**45% of the sample handed its tool list to an unauthenticated caller.** That
+is a new measurement, not a recovery of the old one, and the sampling limits
+are real — one endpoint per publisher deliberately stops one operator with 763
+listed servers from setting the rate, but it over-weights small publishers as a
+result. Whether a given open endpoint is a fault or an intentionally public
+service is not a judgement this tool makes. See [EVIDENCE.md](EVIDENCE.md).
 
 ```
 F1  auth-absence         tools/list returned a JSON-RPC result with no token

@@ -52,7 +52,53 @@ What survives from the original run without qualification:
   answered `tools/list` without a token. This one was verified by hand, twice.
   It is why the probe replays rather than stopping at the challenge.
 
-### The re-measurement must be run with v0.9.0 or later
+### The re-measurement, run 2026-09-11 with v0.9.1
+
+It has been done. A fresh sample was drawn from the registry and probed once
+each with the corrected probe.
+
+```
+Registry population at 2026-09-11: 5,897 active servers,
+4,942 of them exposing a remote HTTP endpoint, across 1,335 publisher domains.
+
+Sample: 100 endpoints, at most one per publisher domain.
+
+ 94  conclusive
+  6  inconclusive
+
+ 45  served the tool list to an unauthenticated caller   (F1, 45.0%)
+ 40  refused and published RFC 9728 metadata that resolved   (pass)
+  7  refused with no followable challenge   (F2)
+  1  advertised metadata at a non-http(s) URL, refused unfetched   (F2)
+  1  advertised metadata that would not fetch   (F2)
+```
+
+**45.0% of the sample served its tool list with no token** — 47.9% of the
+endpoints that produced a conclusive answer.
+
+This is a new measurement, not a reclassification of the old one. The 40/74
+figure stays suspended and is not restated: the receipts behind it recorded no
+bodies, so it cannot be recovered. That the two rates land near each other is
+not evidence either way, and should not be reported as agreement.
+
+**Sampling limits, which are real:**
+
+- One endpoint per publisher domain. That deliberately stops a single operator
+  with 763 listed servers from setting the rate, but it also means the sample
+  over-weights small publishers relative to the endpoint population. A rate
+  weighted by endpoints rather than by publisher would be a different number,
+  and we have not measured it.
+- Registry listing is itself a filter. Endpoints never published to the
+  registry are not represented at all.
+- One probe, one timestamp, one network position. Everything in the
+  README's methodology section about fingerprinting and freshness applies.
+- Whether an open endpoint is a fault or an intentionally public service is not
+  a judgement this measurement makes. Some of the 45 are certainly deliberate.
+
+No endpoint is named here, and the per-endpoint detail is not published. That
+is a disclosure matter handled privately with operators.
+
+### Earlier probes under-reported
 
 v0.4.0 fixed the error that over-reported. v0.9.0 fixed five that
 *under*-reported, all in the same place: the probe read the wire more narrowly
