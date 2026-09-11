@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/unempyd/X190/security/advisories/new
+    about: Anything that would let X190 mislead a reader or reach where it should not. Private until published.
+  - name: What X190 does and does not claim
+    url: https://github.com/unempyd/X190#methodology-honesty
+    about: Read this before reporting a limitation. Several are known and documented.

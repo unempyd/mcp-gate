@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "x190"
+dynamic = ["version"]
+description = "Does this MCP endpoint serve its tool list to an unauthenticated caller? A runtime probe that emits a signed receipt of what it observed."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "unempyd" }]
+keywords = ["mcp", "model-context-protocol", "oauth", "rfc9728", "security", "probe"]
+dependencies = []
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Source = "https://github.com/unempyd/X190"
+Issues = "https://github.com/unempyd/X190/issues"
+Evidence = "https://github.com/unempyd/X190/blob/main/EVIDENCE.md"
+
+[project.scripts]
+X190 = "X190:main"
+
+[tool.setuptools]
+py-modules = ["X190"]
+
+# One source of truth for the version: the module itself.
+[tool.setuptools.dynamic]
+version = { attr = "X190.VERSION" }

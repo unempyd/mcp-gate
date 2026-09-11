@@ -5,3 +5,6 @@ receipts/
 X190-receipts/
 *.receipt.json
 !demo/*.receipt.json
+*.egg-info/
+build/
+dist/

@@ -30,12 +30,24 @@ F2  incomplete-oauth-rs  refused, but with no RFC 9728 challenge a client could
                          follow, or with metadata that does not resolve
 ```
 
+## Install
+
+```bash
+pip install git+https://github.com/unempyd/X190@v0.8.0
+```
+
+That gives you an `X190` command. No dependencies, so it works in any Python
+3.9+ environment. If you would rather not install anything, the tool is one
+file: download `X190.py` from the [latest
+release](https://github.com/unempyd/X190/releases/latest) and run it with
+`python3 X190.py`.
+
 ## Usage
 
 ```bash
-python3 X190.py check https://host/mcp        # probe -> signed receipt
-python3 X190.py check http://127.0.0.1:3000/mcp
-python3 X190.py verify-receipt x.receipt.json
+X190 check https://host/mcp                   # probe -> signed receipt
+X190 check http://127.0.0.1:3000/mcp
+X190 verify-receipt x.receipt.json
 ```
 
 Exit codes: `0` = pass, or inconclusive only; `1` = at least one fault;
@@ -89,7 +101,7 @@ That key is a demo constant, not a secret.
 ## GitHub Action
 
 ```yaml
-- uses: unempyd/X190@v0.7.0
+- uses: unempyd/X190@v0.8.0
   with:
     target: https://your-host/mcp
     gate-key: ${{ secrets.X190_KEY }}
@@ -123,6 +135,18 @@ source-code scanner — earlier versions shipped one, and the measurement above
 is why it was removed: every fault in the population was observable at the
 endpoint, and none of the affected servers published source to scan. Not a
 replacement for the official conformance suite.
+
+## Support
+
+Something X190 got wrong, or missed: [open an
+issue](https://github.com/unempyd/X190/issues/new/choose). Anything that would
+let X190 mislead a reader or reach somewhere it should not: [security
+advisory](https://github.com/unempyd/X190/security/advisories/new), private
+until published. See [SECURITY.md](SECURITY.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+The tool is MIT licensed, which already permits commercial use. There is nothing
+to buy.
 
 ## Methodology honesty
 
