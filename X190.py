@@ -21,11 +21,11 @@ like any other. See EVIDENCE.md for the measurement behind this scope.
 The receipt records what was observed. Whether an open endpoint is a fault or
 an intentionally public service is a judgement this tool does not make.
 """
-import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys, tempfile
+import argparse, hashlib, hmac, ipaddress, json, os, re, socket, sys, tempfile, zlib
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 DEMO_KEY = "X190-demo-key-not-a-secret"
 PROTOCOL_VERSION = "2026-07-28"
 CLASSES = {
@@ -41,6 +41,47 @@ def hget(headers, name):
         if k.lower() == name.lower():
             return v
     return None
+
+def decode_body(raw, content_encoding, cap):
+    """Decompress a response body, bounded. Returns (bytes, truncated).
+
+    X190 never sends `Accept-Encoding`, so anything compressed here arrived
+    unasked — from an intermediary, or from a server that would rather the
+    probe could not read it. A real client decompresses, so leaving it packed
+    reads an endpoint that is serving its tool list as unobservable.
+
+    The cap is not optional: this runs against endpoints that are not on our
+    side, and a small compressed body can expand without bound.
+    """
+    enc = (content_encoding or "").strip().lower()
+    if enc in ("gzip", "x-gzip"):
+        attempts = [zlib.MAX_WBITS | 16]
+    elif enc == "deflate":
+        attempts = [zlib.MAX_WBITS, -zlib.MAX_WBITS]   # served both wrapped and raw
+    else:
+        return raw, False
+    for wbits in attempts:
+        chunks, remaining, total = [], raw, 0
+        try:
+            while remaining:
+                d = zlib.decompressobj(wbits)
+                chunk = d.decompress(remaining, cap + 1 - total)
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > cap:
+                    break
+                # RFC 1952 lets gzip members be concatenated, and proxies emit
+                # them. Stopping at the first member truncates the body with no
+                # sign it happened, which reads an open endpoint as unparseable.
+                nxt = d.unused_data
+                if not nxt or nxt == remaining:
+                    break
+                remaining = nxt
+        except zlib.error:
+            continue
+        out = b"".join(chunks)
+        return out[:cap], len(out) > cap
+    return raw, False   # undecodable: hand back the bytes and let parsing fail honestly
 
 def collect_jsonrpc(body, content_type=""):
     """Every JSON-RPC object in a response body, in order.
@@ -59,12 +100,45 @@ def collect_jsonrpc(body, content_type=""):
             out.append(obj)
 
     if "text/event-stream" in (content_type or "").lower() or text.startswith("data:"):
-        for line in text.splitlines():
-            if line.startswith("data:"):
+        # SSE carries one event as consecutive `data:` fields ended by a blank
+        # line, and the client joins those fields with "\n" before parsing. A
+        # server that pretty-prints its JSON therefore sends a single object
+        # across many lines; reading each line alone finds nothing and would
+        # report an endpoint that is serving its tool list as unobservable.
+        def flush(buf):
+            if not buf:
+                return
+            try:
+                take(json.loads("\n".join(buf)))
+                return
+            except ValueError:
+                pass
+            # Not one object after joining. A server may also pack several
+            # complete objects into consecutive data lines without the blank
+            # line between them; read those individually rather than lose the
+            # answer entirely.
+            for ln in buf:
                 try:
-                    take(json.loads(line[5:].strip()))
+                    take(json.loads(ln))
                 except ValueError:
                     continue
+
+        buf = []
+        # SSE ends a line at CR, LF or CRLF and nothing else. str.splitlines()
+        # also breaks on U+2028, U+0085 and friends, which are legal inside a
+        # JSON string value — splitting there fragments a payload that no real
+        # client fragments, and the tool list is lost.
+        for line in re.split(r"\r\n|\r|\n", text):
+            if line.startswith(":"):        # comment field
+                continue
+            if line == "":                  # only a truly empty line dispatches
+                flush(buf)
+                buf = []
+                continue
+            if line.startswith("data:"):
+                v = line[5:]
+                buf.append(v[1:] if v.startswith(" ") else v)   # one leading space
+        flush(buf)   # a stream that ends without its final blank line
         return out
     try:
         take(json.loads(text))
@@ -158,25 +232,40 @@ def probe_http(url, timeout=10):
     probe_host = _parts.hostname
     opener = guarded_opener(probe_host, probe_origin=_parts.netloc)
 
+    def _read(status, headers, raw, final_url):
+        """One place where a raw body becomes text, so the compressed path and
+        the plain path cannot drift apart."""
+        over = len(raw) > BODY_SNIPPET
+        body, unpacked_over = decode_body(raw[:BODY_SNIPPET],
+                                          hget(headers, "Content-Encoding"), BODY_SNIPPET)
+        # Which cap was hit is part of the observation: a bomb arrives small on
+        # the wire, so reporting it as a read-cap hit would describe a transfer
+        # that never happened.
+        if over:
+            why = f"response body hit the {BODY_SNIPPET}-byte read cap"
+        elif unpacked_over:
+            why = f"decompressed body hit the {BODY_SNIPPET}-byte output cap"
+        else:
+            why = None
+        return (status, headers, body.decode("utf-8", "replace"), final_url, why)
+
     def post(body, extra=None):
-        """Returns (status, headers, text, final_url, truncated). Raises BlockedRedirect."""
+        """Returns (status, headers, text, final_url, truncation_reason).
+
+        The last item is None, or a phrase naming the cap that was hit."""
         req = urllib.request.Request(url, data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json",
                      "Accept": "application/json, text/event-stream",
                      "User-Agent": f"X190/{VERSION} (correctness probe)", **(extra or {})})
         try:
             with opener.open(req, timeout=timeout) as r:
-                raw = r.read(BODY_SNIPPET + 1)
-                return (r.status, dict(r.headers), raw[:BODY_SNIPPET].decode("utf-8", "replace"),
-                        r.url, len(raw) > BODY_SNIPPET)
+                return _read(r.status, dict(r.headers), r.read(BODY_SNIPPET + 1), r.url)
         except BlockedRedirect:
             raise
         except urllib.error.HTTPError as e:
-            raw = e.read(BODY_SNIPPET + 1) or b""
-            return (e.code, dict(e.headers), raw[:BODY_SNIPPET].decode("utf-8", "replace"),
-                    e.url, len(raw) > BODY_SNIPPET)
+            return _read(e.code, dict(e.headers), e.read(BODY_SNIPPET + 1) or b"", e.url)
         except Exception as e:
-            return None, {}, str(e), url, False
+            return None, {}, str(e), url, None
 
     def off_target(stage, e):
         evidence.append(f"{stage} -> refused: {e}")
@@ -221,7 +310,7 @@ def probe_http(url, timeout=10):
     if sess:
         evidence.append("session header issued (Mcp-Session-Id present)")
         followup["Mcp-Session-Id"] = sess
-    if s1 == 200:
+    if s1 is not None and 200 <= s1 < 300:
         try:
             post({"jsonrpc": "2.0", "method": "notifications/initialized"}, followup)
         except BlockedRedirect:
@@ -233,10 +322,14 @@ def probe_http(url, timeout=10):
         return off_target("tokenless tools/list", e)
     evidence.append(f"tokenless tools/list -> {s2}")
     if truncated:
-        evidence.append(f"response body hit the {BODY_SNIPPET}-byte read cap and was truncated")
+        evidence.append(f"{truncated} and was truncated")
 
     rpc = answer_for(collect_jsonrpc(b2, hget(h2, "Content-Type")), 2)
-    if s2 == 200 and rpc is not None and "result" in rpc:
+    # A real client reads the body, not the number 200, so any 2xx can carry the
+    # answer. What counts as proof is unchanged — a JSON-RPC `result` must be
+    # present — so widening this cannot accuse a server that actually refused.
+    ok2 = s2 is not None and 200 <= s2 < 300
+    if ok2 and rpc is not None and "result" in rpc:
         # Positive proof: the call succeeded without a token.
         result = rpc.get("result") or {}
         tools = result.get("tools") if isinstance(result, dict) else None
@@ -247,9 +340,9 @@ def probe_http(url, timeout=10):
             served = "tools/list returned a JSON-RPC result"
         advertised = s1 in (401, 403) and (hget(h1, "WWW-Authenticate") or hget(h2, "WWW-Authenticate"))
         findings.append({"id": "AUTH-OPEN", "class": "F1", "status": "fail",
-                         "evidence": f"tokenless tools/list -> 200 with a JSON-RPC result; {served}"
+                         "evidence": f"tokenless tools/list -> {s2} with a JSON-RPC result; {served}"
                                      + (" — OAuth advertised on initialize but not enforced" if advertised else "")})
-    elif s2 == 200 and rpc is not None and "error" in rpc:
+    elif ok2 and rpc is not None and "error" in rpc:
         # It refused, inside a 200. That is a real refusal, so F1 does not apply.
         err = rpc.get("error") or {}
         wa = hget(h2, "WWW-Authenticate") or hget(h1, "WWW-Authenticate") or ""
@@ -261,13 +354,13 @@ def probe_http(url, timeout=10):
             findings.append({"id": "AUTH-REFUSED-NO-CHALLENGE", "class": "F2", "status": "fail",
                              "evidence": f"tools/list refused at the JSON-RPC layer ({detail}) with no "
                                          f"WWW-Authenticate header: a client cannot discover how to authenticate"})
-    elif s2 == 200 and truncated:
+    elif ok2 and truncated:
         findings.append({"id": "RESPONSE-TRUNCATED", "class": "F1", "status": "inconclusive",
-                         "evidence": f"tools/list -> 200 but the body exceeded the {BODY_SNIPPET}-byte "
-                                     f"read cap and no JSON-RPC answer could be parsed; posture not observable"})
-    elif s2 == 200:
+                         "evidence": f"tools/list -> {s2} but the {truncated} and no JSON-RPC "
+                                     f"answer could be parsed; posture not observable"})
+    elif ok2:
         findings.append({"id": "NOT-MCP", "class": "F1", "status": "inconclusive",
-                         "evidence": f"tools/list -> 200 but the body is not a JSON-RPC response "
+                         "evidence": f"tools/list -> {s2} but the body is not a JSON-RPC response "
                                      f"({(hget(h2, 'Content-Type') or 'no content-type')!r}); nothing about auth is observable"})
     elif s2 in (401, 403):
         # Keyed on s2: the tools/list response is the authoritative challenge;

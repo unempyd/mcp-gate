@@ -52,6 +52,26 @@ What survives from the original run without qualification:
   answered `tools/list` without a token. This one was verified by hand, twice.
   It is why the probe replays rather than stopping at the challenge.
 
+### The re-measurement must be run with v0.9.0 or later
+
+v0.4.0 fixed the error that over-reported. v0.9.0 fixed five that
+*under*-reported, all in the same place: the probe read the wire more narrowly
+than a real MCP client does. It missed a tool list delivered across several
+SSE `data:` lines, one returned under a 2xx that was not literally 200, one
+sent compressed, one served as concatenated gzip members, and one whose
+payload contained a Unicode line separator.
+Each was confirmed by standing up a server the official MCP SDK lists tools
+from with no credentials, and watching the probe of the day call it
+`inconclusive`.
+
+Consequence for the record: an `inconclusive` from a probe older than v0.9.0
+is weaker than it looks — it may be an open endpoint the probe could not read,
+not an endpoint whose posture was genuinely unobservable. `fail` and `pass`
+results are unaffected, since both rest on positive evidence that these bugs
+could only suppress. The outstanding re-measurement should therefore be run
+with v0.9.0 or later, and its `inconclusive` bucket compared against the
+original run's rather than assumed equivalent.
+
 ## Why there is no source scanner
 
 Two independent grounds.

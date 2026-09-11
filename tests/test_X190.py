@@ -5,6 +5,7 @@ could be wrong: calling a server open when it refused, or calling it safe when
 it handed over the tool list. The first destroys trust in the receipt; the
 second is the fault we exist to catch.
 """
+import gzip
 import http.server
 import json
 import os
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zlib
 import importlib.util
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -138,6 +140,193 @@ class OpenServerIsCaught(ServerCase):
         findings, evidence = self.probe(H)
         self.assertIn("AUTH-OPEN", ids(findings))
         self.assertTrue(any("session header issued" in e for e in evidence))
+
+    def test_sse_result_split_across_data_lines_is_caught(self):
+        """One SSE event may carry its payload in several `data:` fields.
+
+        The SSE spec joins them with a newline, so pretty-printed JSON over an
+        event stream is one object to any real client. Parsing each line as
+        standalone JSON finds nothing and reads an open server as unobservable.
+        Verified against the official MCP SDK: it lists the tools here.
+        """
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                pretty = json.dumps(json.loads(TOOLS_RESULT), indent=2)
+                body = ("event: message\n"
+                        + "".join(f"data: {ln}\n" for ln in pretty.splitlines())
+                        + "\n")
+                self.reply(200, body.encode(), content_type="text/event-stream")
+
+        findings, _ = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+
+    def test_result_under_a_non_200_success_status_is_caught(self):
+        """Positive proof is the JSON-RPC result, not the number 200.
+
+        A 2xx that is not 200 still hands the tool list to a real client, so
+        keying the finding on `== 200` excuses an open server. Verified against
+        the official MCP SDK: it lists the tools here.
+        """
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(201, TOOLS_RESULT)
+
+        findings, _ = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+
+    def test_evidence_records_the_status_actually_observed(self):
+        """The receipt is the artefact; it must not report a status that was
+        never returned. A hardcoded 200 in the finding text survived the move
+        to accepting any 2xx and would have misreported the observation."""
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(201, TOOLS_RESULT)
+
+        findings, _ = self.probe(H)
+        ev = next(f for f in findings if f["id"] == "AUTH-OPEN")["evidence"]
+        self.assertIn("201", ev)
+        self.assertNotIn("-> 200", ev)
+
+    def test_gzipped_tool_list_is_read_not_filed_as_unparseable(self):
+        """The probe sends no Accept-Encoding, so a compressed body arrived
+        unasked. A real client decompresses it — verified against the official
+        MCP SDK, which lists the tools here — so leaving it packed would report
+        an open endpoint as unobservable."""
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, gzip.compress(TOOLS_RESULT),
+                           [("Content-Encoding", "gzip")])
+
+        findings, _ = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+
+    def test_deflated_tool_list_is_read(self):
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, zlib.compress(TOOLS_RESULT),
+                           [("Content-Encoding", "deflate")])
+
+        findings, _ = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+
+    def test_raw_deflate_is_read_too(self):
+        """deflate is served both zlib-wrapped and raw in the wild."""
+        c = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+        raw = c.compress(TOOLS_RESULT) + c.flush()
+
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, raw, [("Content-Encoding", "deflate")])
+
+        findings, _ = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+
+    def test_multi_member_gzip_is_read_whole(self):
+        """RFC 1952 lets gzip members be concatenated, and proxies emit them.
+
+        Decoding only the first member truncates the payload into unparseable
+        JSON with nothing to show it happened, so an open endpoint reads as
+        `NOT-MCP`. The stdlib gzip module reads all members; so must this.
+        """
+        half = len(TOOLS_RESULT) // 2
+        multi = gzip.compress(TOOLS_RESULT[:half]) + gzip.compress(TOOLS_RESULT[half:])
+        self.assertEqual(gzip.decompress(multi), TOOLS_RESULT, "fixture must be valid gzip")
+
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, multi, [("Content-Encoding", "gzip")])
+
+        findings, _ = self.probe(H)
+        self.assertIn("AUTH-OPEN", ids(findings))
+
+    def test_a_decompression_bomb_is_bounded_and_reported(self):
+        """A hostile endpoint can ship a few KB that expand without bound.
+        Decompression is capped at the same read limit as a plain body, and the
+        result is reported as truncated rather than as a safe endpoint."""
+        bomb = gzip.compress(b"\0" * (gate.BODY_SNIPPET * 8))
+        self.assertLess(len(bomb), 200_000, "test bomb should be small on the wire")
+
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, bomb, [("Content-Encoding", "gzip")])
+
+        findings, evidence = self.probe(H)
+        self.assertNotIn("AUTH-OPEN", ids(findings))
+        self.assertIn("RESPONSE-TRUNCATED", ids(findings))
+        self.assertEqual({"inconclusive"}, statuses(findings))
+        self.assertTrue(any("truncated" in e for e in evidence))
+        # a bomb is small on the wire: claiming the read cap was hit would
+        # describe a transfer that never happened
+        self.assertTrue(any("output cap" in e for e in evidence), evidence)
+        self.assertFalse(any("read cap" in e for e in evidence), evidence)
+        ev = next(f for f in findings if f["id"] == "RESPONSE-TRUNCATED")["evidence"]
+        self.assertIn("output cap", ev)
+
+    def test_undecodable_encoding_does_not_crash_the_probe(self):
+        """A body labelled gzip that is not gzip must fail toward reporting
+        nothing observable, not toward a traceback."""
+        class H(Base):
+            def do_POST(self):
+                self.read_method()
+                self.reply(200, b"this is not gzip at all",
+                           [("Content-Encoding", "gzip")])
+
+        findings, _ = self.probe(H)
+        self.assertEqual({"inconclusive"}, statuses(findings))
+
+    def test_whitespace_only_line_does_not_fragment_an_event(self):
+        """Only a truly empty line ends an SSE event.
+
+        A line of spaces is an unknown field, not a boundary. Treating it as one
+        flushes a half-read payload, both parses fail, and an open server is
+        filed as unobservable — the exact failure this SSE work exists to stop.
+        """
+        pretty = json.dumps(json.loads(TOOLS_RESULT), indent=2)
+        lines = [f"data: {ln}" for ln in pretty.splitlines()]
+        body = "\n".join(lines[:3] + ["   "] + lines[3:]) + "\n\n"
+        objs = gate.collect_jsonrpc(body, "text/event-stream")
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(len(objs[0]["result"]["tools"]), 2)
+
+    def test_unicode_line_separator_in_a_value_does_not_fragment_an_event(self):
+        """SSE breaks lines at CR/LF only.
+
+        `str.splitlines()` also breaks at U+2028 and U+0085, which are legal
+        inside a JSON string. A tool description carrying one would split the
+        payload and lose the finding, though no real client splits there.
+        """
+        payload = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [
+            {"name": "a", "description": "before\u2028after"},
+            {"name": "b", "description": "next\u0085line"}]}}
+        one_line = json.dumps(payload, ensure_ascii=False)
+        self.assertGreater(len(one_line.splitlines()), 1, "payload must exercise the split")
+        objs = gate.collect_jsonrpc(f"data: {one_line}\n\n", "text/event-stream")
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0]["result"]["tools"][0]["description"], "before\u2028after")
+
+    def test_multiline_event_reassembles_into_one_object(self):
+        """A pretty-printed result arrives as one object, not several fragments.
+
+        This does not pin the join separator: for valid JSON the newlines fall
+        only where whitespace is optional, so joining with "" parses too. What
+        it pins is that the event is reassembled at all and its values survive.
+        """
+        payload = {"jsonrpc": "2.0", "id": 2,
+                   "result": {"tools": [{"name": "read_file",
+                                         "description": "line1\nline2"}]}}
+        pretty = json.dumps(payload, indent=2)
+        body = "".join(f"data: {ln}\n" for ln in pretty.splitlines()) + "\n"
+        objs = gate.collect_jsonrpc(body, "text/event-stream")
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0]["result"]["tools"][0]["description"], "line1\nline2")
 
 
 class RefusalInsideA200IsNotOpen(ServerCase):

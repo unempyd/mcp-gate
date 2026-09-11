@@ -172,6 +172,21 @@ position — not full OAuth conformance.
   `notifications/initialized`, then `tools/list` carrying the protocol version
   the server negotiated. A spec-strict server that would otherwise reject the
   request is measured rather than filed as inconclusive.
+- The answer is read the way a client reads it, not the way the status line
+  suggests. A tool list served over an event stream is parsed with real SSE
+  framing — consecutive `data:` fields joined with a newline, as the spec
+  requires — a JSON-RPC `result` is proof under any 2xx rather than only a
+  literal 200, and a body that arrives compressed is decompressed (bounded by
+  the same read cap, because a small compressed body can expand without limit).
+  All three were false negatives: endpoints the official MCP SDK lists tools
+  from were reported `inconclusive`. What counts as proof is unchanged — a
+  JSON-RPC `result` — so this cannot accuse a server that refused.
+- Where the two differ, this reads **more** leniently than a strict client. A
+  result delivered in a shape the reference client rejects — an unterminated
+  event stream, a single-element batch, a status it will not read a body from —
+  is still reported, because the tool list did leave the server to an
+  unauthenticated caller and a less fussy client would take it. The finding
+  records the status and encoding actually observed, so the reader can judge.
 - Every request this tool makes — the probe itself and the metadata fetch —
   goes through one guarded opener that re-validates each redirect hop. Neither
   will follow a redirect to a private or link-local address, so a scanned server
